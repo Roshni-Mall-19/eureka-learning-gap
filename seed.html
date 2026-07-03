@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setup — Seed Question Bank</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="admin">
+  <div class="admin-main" style="max-width:640px;margin:0 auto;">
+    <div class="admin-header"><h1>Setup — Seed Question Bank</h1></div>
+    <div class="panel">
+      <p style="color:#475467;font-size:.92rem;line-height:1.6;">
+        Run this <b>once</b> after you've run <code>schema.sql</code> in Supabase and pasted your
+        project URL/key into <code>js/supabase-client.js</code>. It will insert the full Class 8, 9
+        and 10 Science question bank (~40 questions each) into your <code>questions</code> table.
+        Safe to run again — it checks for existing questions per standard first.
+      </p>
+      <button class="btn btn-primary" id="seedBtn">Seed Questions Now</button>
+      <div id="log" style="margin-top:16px;font-family:'IBM Plex Mono',monospace;font-size:.8rem;white-space:pre-wrap;color:#344054;"></div>
+    </div>
+    <a href="admin.html" style="font-size:.85rem;color:#475467;">← Back to Dashboard</a>
+  </div>
+
+  <script src="js/questions-bank.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/seed.js"></script>
+</body>
+</html>

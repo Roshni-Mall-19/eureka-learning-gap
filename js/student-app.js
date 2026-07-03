@@ -1,0 +1,299 @@
+const appEl = document.getElementById("app");
+const bodyEl = document.getElementById("bodyEl");
+const brandText = document.getElementById("brandText");
+
+const state = {
+  lang: "en",
+  standard: null,
+  student: { name: "", age: "", gender: "", school_name: "", area: "" },
+  questions: [],   // fetched from Supabase for the chosen standard
+  answers: {},     // question.id -> value
+  qIndex: 0
+};
+
+function t() { return UI_TEXT[state.lang]; }
+function applyLangAttrs() { bodyEl.setAttribute("lang", state.lang); brandText.textContent = t().appTitle; }
+
+// ---------- Screen: Language select ----------
+function screenLang() {
+  applyLangAttrs();
+  appEl.innerHTML = `
+    <div class="card">
+      <h1 class="student-h">Choose your language / अपनी भाषा चुनें / तुमची भाषा निवडा</h1>
+      <div class="lang-row">
+        <button class="lang-btn" data-l="en">English</button>
+        <button class="lang-btn" data-l="hi">हिंदी</button>
+        <button class="lang-btn" data-l="mr">मराठी</button>
+      </div>
+    </div>`;
+  appEl.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => { state.lang = b.dataset.l; screenWelcome(); });
+}
+
+// ---------- Screen: Welcome ----------
+function screenWelcome() {
+  applyLangAttrs();
+  appEl.innerHTML = `
+    <div class="card">
+      <h1 class="student-h">${t().welcome}</h1>
+      <p class="sub">${t().welcomeSub}</p>
+      <button class="big-btn" id="startBtn">${t().start}</button>
+    </div>`;
+  document.getElementById("startBtn").onclick = screenStandard;
+}
+
+// ---------- Screen: Standard select ----------
+function screenStandard() {
+  appEl.innerHTML = `
+    <div class="card">
+      <h1 class="student-h">${t().selectStandard}</h1>
+      <button class="big-btn" data-s="8">${t().std8}</button>
+      <button class="big-btn alt" data-s="9">${t().std9}</button>
+      <button class="big-btn coral" data-s="10">${t().std10}</button>
+    </div>`;
+  appEl.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { state.standard = b.dataset.s; screenDetails(); });
+}
+
+// ---------- Screen: Student details ----------
+function screenDetails() {
+  appEl.innerHTML = `
+    <div class="card">
+      <h1 class="student-h">${t().studentDetails}</h1>
+      <label class="field-label">${t().name}</label>
+      <input class="field" id="fName" type="text">
+      <label class="field-label">${t().age}</label>
+      <input class="field" id="fAge" type="number" min="10" max="18">
+      <label class="field-label">${t().gender}</label>
+      <select class="field" id="fGender"><option value="">--</option><option value="Male">${t().male}</option><option value="Female">${t().female}</option></select>
+      <label class="field-label">${t().school}</label>
+      <input class="field" id="fSchool" type="text">
+      <label class="field-label">${t().area}</label>
+      <select class="field" id="fArea"><option value="">--</option><option value="Rural">${t().rural}</option><option value="Urban">${t().urban}</option></select>
+      <button class="big-btn" id="detailsNext" style="margin-top:16px;">${t().next}</button>
+      <p id="detailsErr" style="color:#C64B4B;font-weight:600;display:none;">${t().required}</p>
+    </div>`;
+  document.getElementById("detailsNext").onclick = () => {
+    const name = document.getElementById("fName").value.trim();
+    const age = document.getElementById("fAge").value;
+    const gender = document.getElementById("fGender").value;
+    const school = document.getElementById("fSchool").value.trim();
+    const area = document.getElementById("fArea").value;
+    if (!name || !age || !gender || !school || !area) {
+      document.getElementById("detailsErr").style.display = "block";
+      return;
+    }
+    state.student = { name, age: Number(age), gender, school_name: school, area };
+    loadQuestionsAndStart();
+  };
+}
+
+// ---------- Load questions from Supabase, then start wizard ----------
+async function loadQuestionsAndStart() {
+  appEl.innerHTML = `<div class="card"><p class="sub">Loading your questions...</p></div>`;
+  const { data, error } = await supabaseClient
+    .from("questions").select("*").eq("standard", state.standard).eq("active", true)
+    .order("order_index", { ascending: true });
+  if (error || !data || data.length === 0) {
+    appEl.innerHTML = `<div class="card"><p class="sub">Could not load questions. Please check that the database has been seeded (see seed.html) and that js/supabase-client.js has your project keys, then reload.</p></div>`;
+    return;
+  }
+  state.questions = data;
+  state.qIndex = 0;
+  state.answers = {};
+  screenQuestion();
+}
+
+const SECTION_TITLES = { likert: "sectionA", mcq_behaviour: "sectionB", ai_readiness: "sectionC", mcq: "sectionD", text: "sectionE" };
+
+// ---------- Screen: Question wizard ----------
+function screenQuestion() {
+  const q = state.questions[state.qIndex];
+  const total = state.questions.length;
+  const pct = Math.round((state.qIndex / total) * 100);
+  const qText = q["question_" + state.lang] || q.question_en;
+
+  let bodyHtml = "";
+  if (q.type === "likert") {
+    const labels = t().likertLabels;
+    bodyHtml = `
+      <div class="likert-row">
+        <div class="likert-q">${qText}</div>
+        <div class="likert-scale">
+          ${[1,2,3,4,5].map(v => `
+            <label class="likert-opt">
+              <input type="radio" name="likert" value="${v}" ${state.answers[q.id]==v ? "checked":""}>
+              <div class="dot">${v}</div>
+              <div class="likert-caption">${v===1||v===5 ? labels[v-1] : ""}</div>
+            </label>`).join("")}
+        </div>
+      </div>`;
+  } else if (q.type === "text") {
+    bodyHtml = `
+      <div class="likert-q">${qText}</div>
+      <textarea class="field" id="textAns" placeholder="${t().typeAnswer}">${state.answers[q.id] || ""}</textarea>`;
+  } else if (q.type === "mcq_multi") {
+    let opts = [];
+    try { opts = typeof q.options === "string" ? JSON.parse(q.options) : (q.options || []); } catch (e) { opts = []; }
+    const selected = Array.isArray(state.answers[q.id]) ? state.answers[q.id] : [];
+    bodyHtml = `
+      <div class="likert-q">${qText}</div>
+      <p style="font-size:.82rem;color:#6a756f;margin:-6px 0 10px;font-weight:600;">(Select all that apply)</p>
+      ${opts.map(opt => `
+        <label class="mcq-option ${selected.includes(opt) ? "selected":""}" data-opt="${opt.replace(/"/g,'&quot;')}">
+          <input type="checkbox" value="${opt.replace(/"/g,'&quot;')}" ${selected.includes(opt) ? "checked":""}> ${opt}
+        </label>`).join("")}`;
+  } else {
+    // mcq_behaviour, ai_readiness, mcq
+    let opts = [];
+    try { opts = typeof q.options === "string" ? JSON.parse(q.options) : (q.options || []); } catch (e) { opts = []; }
+    if (q.type === "ai_readiness" && opts.every(o => ["yes","no","maybe"].includes(o))) {
+      opts = opts.map(o => t()[o]);
+    }
+    bodyHtml = `
+      <div class="likert-q">${qText}</div>
+      ${opts.map(opt => `
+        <label class="mcq-option ${state.answers[q.id]===opt ? "selected":""}" data-opt="${opt.replace(/"/g,'&quot;')}">
+          <input type="radio" name="mcq" value="${opt.replace(/"/g,'&quot;')}" ${state.answers[q.id]===opt ? "checked":""}> ${opt}
+        </label>`).join("")}`;
+  }
+
+  appEl.innerHTML = `
+    <div class="progress-label">${t().progress} ${state.qIndex+1} ${t().of} ${total}</div>
+    <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+    <span class="section-tag">${t()[SECTION_TITLES[q.type]]}</span>
+    <div class="card">${bodyHtml}</div>
+    <div style="display:flex;gap:10px;">
+      ${state.qIndex > 0 ? `<button class="big-btn alt" id="backBtn" style="flex:1;">${t().back}</button>` : ""}
+      <button class="big-btn" id="nextBtn" style="flex:2;">${state.qIndex === total-1 ? t().submit : t().next}</button>
+    </div>
+    <p id="qErr" style="color:#C64B4B;font-weight:600;display:none;">${t().required}</p>`;
+
+  if (q.type === "likert") {
+    appEl.querySelectorAll('input[name="likert"]').forEach(r => r.onchange = () => { state.answers[q.id] = r.value; });
+  } else if (q.type === "mcq_multi") {
+    appEl.querySelectorAll(".mcq-option").forEach(el => el.onclick = (e) => {
+      if (e.target.tagName !== "INPUT") el.querySelector("input").checked = !el.querySelector("input").checked;
+      const current = Array.isArray(state.answers[q.id]) ? [...state.answers[q.id]] : [];
+      const opt = el.dataset.opt;
+      const idx = current.indexOf(opt);
+      if (el.querySelector("input").checked) { if (idx === -1) current.push(opt); }
+      else { if (idx > -1) current.splice(idx, 1); }
+      state.answers[q.id] = current;
+      el.classList.toggle("selected", el.querySelector("input").checked);
+    });
+  } else if (q.type !== "text") {
+    appEl.querySelectorAll(".mcq-option").forEach(el => el.onclick = () => {
+      state.answers[q.id] = el.dataset.opt;
+      appEl.querySelectorAll(".mcq-option").forEach(x => x.classList.remove("selected"));
+      el.classList.add("selected");
+    });
+  }
+
+  if (document.getElementById("backBtn")) document.getElementById("backBtn").onclick = () => { state.qIndex--; screenQuestion(); };
+
+  document.getElementById("nextBtn").onclick = () => {
+    if (q.type === "text") {
+      const val = document.getElementById("textAns").value.trim();
+      state.answers[q.id] = val; // text answers are optional
+    } else if (q.type === "mcq_multi") {
+      if (!Array.isArray(state.answers[q.id]) || state.answers[q.id].length === 0) {
+        document.getElementById("qErr").style.display = "block";
+        return;
+      }
+    } else if (state.answers[q.id] === undefined) {
+      document.getElementById("qErr").style.display = "block";
+      return;
+    }
+    if (state.qIndex < total - 1) { state.qIndex++; screenQuestion(); }
+    else submitQuestionnaire();
+  };
+}
+
+// ---------- Submit ----------
+async function submitQuestionnaire() {
+  appEl.innerHTML = `<div class="card"><p class="sub">Saving your answers...</p></div>`;
+
+  const { data: studentRow, error: studentErr } = await supabaseClient
+    .from("students")
+    .insert([{ ...state.student, standard: state.standard, language_used: state.lang }])
+    .select().single();
+
+  if (studentErr) {
+    appEl.innerHTML = `<div class="card"><p class="sub">Something went wrong saving your details: ${studentErr.message}</p></div>`;
+    return;
+  }
+
+  const responseRows = state.questions.map(q => {
+    const val = state.answers[q.id];
+    let is_correct = null;
+    let answer_value;
+    if (q.type === "mcq") {
+      is_correct = (val === q.correct_answer);
+      answer_value = val === undefined ? null : String(val);
+    } else if (q.type === "mcq_multi") {
+      const selected = Array.isArray(val) ? val : [];
+      let correct = [];
+      try { correct = typeof q.correct_answers === "string" ? JSON.parse(q.correct_answers) : (q.correct_answers || []); } catch (e) {}
+      is_correct = selected.length === correct.length && [...selected].sort().join("|") === [...correct].sort().join("|");
+      answer_value = selected.join(", ");
+    } else {
+      answer_value = val === undefined ? null : String(val);
+    }
+    return { student_id: studentRow.id, question_id: q.id, answer_value, is_correct };
+  });
+
+  const { error: respErr } = await supabaseClient.from("responses").insert(responseRows);
+  if (respErr) {
+    appEl.innerHTML = `<div class="card"><p class="sub">Something went wrong saving your answers: ${respErr.message}</p></div>`;
+    return;
+  }
+
+  const result = computeScores(responseRows, state.questions);
+  screenResults(result);
+}
+
+// ---------- Screen: Results ----------
+function screenResults(result) {
+  const level = overallLevel(result.overallScore10);
+  const weakConcepts = result.conceptScores.filter(c => c.weak && c.attempted);
+  const strongConcepts = result.conceptScores.filter(c => !c.weak && c.attempted);
+
+  appEl.innerHTML = `
+    <div class="card score-hero">
+      <h1 class="student-h">${t().finishTitle}</h1>
+      <p class="sub">${t().finishSub}</p>
+      <div class="score-num">${result.overallScore10}</div>
+      <div class="score-max">${t().outOf10} — ${level.label}</div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">${t().strengths}</h3>
+      ${strongConcepts.length ? strongConcepts.map(c => conceptBar(c)).join("") : `<p class="sub">—</p>`}
+      <h3>${t().weakSpots}</h3>
+      ${weakConcepts.length ? weakConcepts.map(c => conceptBar(c)).join("") : `<p class="sub">${t().noWeak}</p>`}
+    </div>
+
+    ${weakConcepts.length ? `
+    <div class="card">
+      <h3 style="margin-top:0;">${t().recommendation}</h3>
+      ${weakConcepts.map(c => `<div class="rec-card">${recommendationFor(c.concept, state.lang)}</div>`).join("")}
+    </div>` : ""}
+
+    <div class="card" style="text-align:center;">
+      <p class="sub">${t().thankYou}</p>
+      <button class="big-btn" id="doneBtn">${t().finishBtn}</button>
+    </div>`;
+
+  document.getElementById("doneBtn").onclick = () => { window.location.href = "index.html"; };
+}
+
+function conceptBar(c) {
+  const color = c.score10 >= 8 ? "#1E8A5F" : c.score10 >= 5 ? "#D98A2B" : "#C64B4B";
+  return `
+    <div class="concept-bar-row">
+      <div class="concept-bar-label"><span>${c.concept}</span><span>${c.score10}/10</span></div>
+      <div class="concept-bar-track"><div class="concept-bar-fill" style="width:${c.score10*10}%;background:${color};"></div></div>
+    </div>`;
+}
+
+// Boot
+screenLang();

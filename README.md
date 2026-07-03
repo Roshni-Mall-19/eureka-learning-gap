@@ -75,8 +75,6 @@ Go to `admin.html` → **Question Bank** → pick a standard → fill the "Add a
 
 ## Admin dashboard login
 `admin.html` now asks for a username/password before showing any data:
-- **Username:** `admin`
-- **Password:** `admin#4`
 
 This is a *basic* gate (kids clicking "I'm the Researcher" by mistake won't see anything) — it is **not real security**, since the password lives in `js/admin-app.js` in plain text and anyone who views the page source can read it. It stops casual access, not a determined person. If you later want real protection (e.g. before sharing the link widely), add Supabase Auth — ask if you'd like help with that.
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VidyaGap — Learning Gap Detector</title>
+<title>ShikshaSetu — Learning Gap Detector</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="css/admin.css">
@@ -16,7 +16,7 @@
     <div class="brand-logo" style="margin-bottom:1.4rem;">
       <div class="brand-icon">🎓</div>
       <div>
-        <div style="font-family:var(--font-display);font-weight:700;font-size:17px;color:var(--ink);">VidyaGap</div>
+        <div style="font-family:var(--font-display);font-weight:700;font-size:17px;color:var(--ink);">ShikshaSetu</div>
         <div style="font-size:10px;color:var(--ink-muted);letter-spacing:1px;text-transform:uppercase;">Researcher Login</div>
       </div>
     </div>
@@ -33,7 +33,7 @@
     <div class="brand-logo">
       <div class="brand-icon">🎓</div>
       <div>
-        <div class="brand-name">VidyaGap</div>
+        <div class="brand-name">ShikshaSetu</div>
         <div class="brand-sub">Learning Analytics</div>
       </div>
     </div>
@@ -53,7 +53,7 @@
   <div class="sidebar-footer">
     <div class="school-tag">
       <strong>IEEE Eu-Reka 2026</strong>
-      AI Learning Gap Detection · Science, Std 8–10
+      AI Learning Gap Detection · Science, Maths, English, Computer · Std 8–10
     </div>
   </div>
 </aside>
@@ -62,12 +62,18 @@
   <header class="topbar">
     <div>
       <div class="topbar-title" id="topbarTitle">Dashboard</div>
-      <div class="topbar-sub">Science Department · Classes 8–10</div>
+      <div class="topbar-sub">Science · Maths · English · Computer — Classes 8–10 <span id="liveDot" style="display:none;color:var(--green);font-weight:600;">· ● Live</span></div>
     </div>
     <div class="topbar-spacer"></div>
+    <select id="stdFilter" style="padding:8px 12px;border-radius:var(--radius);border:1px solid var(--border);font-family:inherit;font-size:13px;background:var(--surface);">
+      <option value="">All Classes</option>
+      <option value="8">Class 8</option>
+      <option value="9">Class 9</option>
+      <option value="10">Class 10</option>
+    </select>
     <div class="search-box"><span>🔍</span><input type="text" id="searchBox" placeholder="Search students…"></div>
-    <div class="notif-btn">🔔<span class="notif-dot" id="liveDot" style="display:none;"></span></div>
-    <div class="avatar-top">RS</div>
+    <button class="btn-primary-top" id="exportBtn">⬇ Export CSV</button>
+    <button class="btn" style="background:var(--surface);border:1px solid var(--border);color:var(--ink-soft);" id="logoutBtn">Logout</button>
   </header>
 
   <main class="page-body" id="pageBody"></main>

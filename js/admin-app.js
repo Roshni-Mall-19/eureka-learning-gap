@@ -43,6 +43,7 @@ const adminState = {
   students: [], questions: [], responses: [],
   qbankStandard: "8",
   search: "",
+  filterStandard: "",
   editingId: null
 };
 
@@ -60,8 +61,54 @@ document.querySelectorAll(".nav-item[data-tab]").forEach(a => {
 });
 document.getElementById("searchBox").addEventListener("input", (e) => {
   adminState.search = e.target.value.toLowerCase();
-  if (adminState.tab === "students") render();
+  render();
 });
+document.getElementById("stdFilter").addEventListener("change", (e) => {
+  adminState.filterStandard = e.target.value;
+  render();
+});
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  sessionStorage.removeItem("vidyagap_admin_ok");
+  location.reload();
+});
+document.getElementById("exportBtn").addEventListener("click", exportCSV);
+
+// Students currently in scope, after applying the class filter + search box
+function visibleStudents() {
+  return adminState.students.filter(s =>
+    (!adminState.filterStandard || s.standard === adminState.filterStandard) &&
+    (!adminState.search || s.name.toLowerCase().includes(adminState.search) || (s.school_name || "").toLowerCase().includes(adminState.search))
+  );
+}
+
+function exportCSV() {
+  const students = visibleStudents();
+  const header = ["Name", "Age", "Gender", "Standard", "School", "Area", "Language", "Submitted At",
+    "Overall Score (%)", "Science %", "Maths %", "English %", "Computer %", "Weak Concepts"];
+  const rows = students.map(s => {
+    const resp = adminState.responses.filter(r => r.student_id === s.id);
+    const subj = computeSubjectScores(resp, adminState.questions);
+    const bySubj = {}; subj.subjects.forEach(x => bySubj[x.subject] = x.score10 * 10);
+    const weak = subj.subjects.filter(x => x.score10 < 6).flatMap(x => x.weakConcepts);
+    return [
+      s.name, s.age || "", s.gender || "", s.standard, s.school_name || "", s.area || "", s.language_used || "",
+      new Date(s.created_at).toLocaleString(),
+      Math.round(subj.overallScore10 * 10),
+      bySubj["Science"] ?? "", bySubj["Maths"] ?? "", bySubj["English"] ?? "", bySubj["Computer"] ?? "",
+      [...new Set(weak)].join("; ")
+    ];
+  });
+  const csv = [header, ...rows].map(row =>
+    row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+  ).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `learning-gap-data-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 async function loadAll() {
   const [{ data: students }, { data: questions }, { data: responses }] = await Promise.all([
@@ -72,7 +119,7 @@ async function loadAll() {
   adminState.students = students || [];
   adminState.questions = questions || [];
   adminState.responses = responses || [];
-  document.getElementById("liveDot").style.display = "block";
+  document.getElementById("liveDot").style.display = "inline";
   document.getElementById("navStudentCount").textContent = adminState.students.length;
   render();
 }
@@ -80,6 +127,10 @@ async function loadAll() {
 function studentScore(studentId) {
   const resp = adminState.responses.filter(r => r.student_id === studentId);
   return computeScores(resp, adminState.questions);
+}
+function studentSubjectScore(studentId) {
+  const resp = adminState.responses.filter(r => r.student_id === studentId);
+  return computeSubjectScores(resp, adminState.questions);
 }
 
 function initials(name) {
@@ -135,10 +186,10 @@ function render() {
 
 // ================= OVERVIEW =================
 function renderOverview() {
-  const students = adminState.students;
+  const students = visibleStudents();
   const conceptEntries = allConceptEntries(students);
   const gapEntries = conceptEntries.filter(c => c.score10 < 7); // anything below 70% counts as a "gap"
-  const scores = students.map(s => studentScore(s.id).overallScore10);
+  const scores = students.map(s => studentSubjectScore(s.id).overallScore10);
   const avgPct = scores.length ? Math.round((scores.reduce((a, c) => a + c, 0) / scores.length) * 10) : 0;
 
   document.getElementById("navGapCount").textContent = gapEntries.length;
@@ -242,7 +293,7 @@ function renderOverview() {
           <div class="card-header"><span class="card-header-icon">🕒</span><h3>Recent submissions</h3></div>
           <div class="card-body" style="padding-top:0.5rem">
             ${recentStudents.length ? recentStudents.map(s => {
-              const pct = Math.round(studentScore(s.id).overallScore10 * 10);
+              const pct = Math.round(studentSubjectScore(s.id).overallScore10 * 10);
               const c = avatarColor(s.id);
               return `<div class="session-item">
                 <div class="session-date" style="background:${c.bg};color:${c.fg}">${initials(s.name)}</div>
@@ -322,7 +373,7 @@ function subjectRowsHtml(conceptEntries) {
 }
 
 function studentRowHtml(s) {
-  const sc = studentScore(s.id);
+  const sc = studentSubjectScore(s.id);
   const pct = Math.round(sc.overallScore10 * 10);
   const badge = statusBadge(pct);
   const c = avatarColor(s.id);
@@ -339,8 +390,7 @@ function studentRowHtml(s) {
 
 // ================= STUDENTS TAB =================
 function renderStudents() {
-  const term = adminState.search;
-  const list = adminState.students.filter(s => !term || s.name.toLowerCase().includes(term) || (s.school_name || "").toLowerCase().includes(term));
+  const list = visibleStudents();
   pageBody.innerHTML = `
     <div class="card">
       <div class="card-header"><span class="card-header-icon">👩‍🎓</span><h3>All students</h3><span style="font-size:11px;color:var(--ink-muted)">${list.length} shown</span></div>
@@ -420,24 +470,25 @@ function renderQuestions() {
 
 async function saveQuestionEdit(q) {
   const g = (id) => document.getElementById(id + "_" + q.id);
-  const isMcqLike = q.type === "mcq" || q.type === "mcq_multi";
-  const optionsRaw = g("ed_options") ? g("ed_options").value.trim() : "";
+  const newType = g("ed_type").value;
+  const isMcqLike = newType === "mcq" || newType === "mcq_multi";
+  const optionsRaw = g("ed_options").value.trim();
   const options = optionsRaw ? optionsRaw.split(",").map(s => s.trim()).filter(Boolean) : null;
 
   const update = {
+    type: newType,
     question_en: g("ed_qEn").value.trim(),
     question_hi: g("ed_qHi").value.trim() || null,
     question_mr: g("ed_qMr").value.trim() || null,
-    options: options ? JSON.stringify(options) : null
+    options: options ? JSON.stringify(options) : null,
+    subject: isMcqLike ? (g("ed_subject").value || null) : null,
+    concept: isMcqLike ? (g("ed_concept").value.trim() || null) : null,
+    chapter: g("ed_chapter").value.trim() || null,
+    difficulty: isMcqLike ? (g("ed_difficulty").value || null) : null,
+    correct_answer: newType === "mcq" ? g("ed_correct").value.trim() : null,
+    correct_answers: null
   };
-  if (isMcqLike) {
-    update.subject = g("ed_subject").value.trim() || null;
-    update.concept = g("ed_concept").value.trim() || null;
-    update.chapter = g("ed_chapter").value.trim() || null;
-    update.difficulty = g("ed_difficulty").value;
-  }
-  if (q.type === "mcq") update.correct_answer = g("ed_correct").value.trim();
-  if (q.type === "mcq_multi") {
+  if (newType === "mcq_multi") {
     const raw = g("ed_correctMulti").value.trim();
     update.correct_answers = raw ? JSON.stringify(raw.split(",").map(s => s.trim()).filter(Boolean)) : null;
   }
@@ -465,26 +516,43 @@ function qbankRow(q) {
   try { correctAnswers = typeof q.correct_answers === "string" ? JSON.parse(q.correct_answers) : (q.correct_answers || []); } catch (e) {}
 
   if (adminState.editingId === q.id) {
-    const isMcqLike = q.type === "mcq" || q.type === "mcq_multi";
     return `
       <div class="qbank-row" style="flex-direction:column;align-items:stretch;background:var(--surface-2);border-radius:var(--radius);padding:14px;margin-bottom:10px;">
+        <div class="form-row"><label>Type</label>
+          <select id="ed_type_${q.id}">
+            <option value="mcq" ${q.type==="mcq"?"selected":""}>Knowledge MCQ — single answer (scored)</option>
+            <option value="mcq_multi" ${q.type==="mcq_multi"?"selected":""}>Knowledge MCQ — multiple correct answers (scored)</option>
+            <option value="likert" ${q.type==="likert"?"selected":""}>Behaviour (1-5 scale)</option>
+            <option value="mcq_behaviour" ${q.type==="mcq_behaviour"?"selected":""}>Multiple Choice (behaviour)</option>
+            <option value="ai_readiness" ${q.type==="ai_readiness"?"selected":""}>AI Readiness (choice)</option>
+            <option value="text" ${q.type==="text"?"selected":""}>Open Text</option>
+          </select>
+        </div>
         <div class="form-row"><label>Question (English)</label><textarea id="ed_qEn_${q.id}">${q.question_en || ""}</textarea></div>
         <div class="form-row"><label>Question (Hindi)</label><textarea id="ed_qHi_${q.id}">${q.question_hi || ""}</textarea></div>
         <div class="form-row"><label>Question (Marathi)</label><textarea id="ed_qMr_${q.id}">${q.question_mr || ""}</textarea></div>
-        ${isMcqLike ? `
-          <div class="form-row"><label>Subject</label><input id="ed_subject_${q.id}" value="${q.subject || ""}"></div>
-          <div class="form-row"><label>Concept</label><input id="ed_concept_${q.id}" value="${q.concept || ""}"></div>
-          <div class="form-row"><label>Chapter</label><input id="ed_chapter_${q.id}" value="${q.chapter || ""}"></div>
-          <div class="form-row"><label>Difficulty</label>
-            <select id="ed_difficulty_${q.id}">
-              <option value="basic" ${q.difficulty==="basic"?"selected":""}>Basic</option>
-              <option value="medium" ${q.difficulty==="medium"?"selected":""}>Medium</option>
-              <option value="hard" ${q.difficulty==="hard"?"selected":""}>Hard</option>
-            </select>
-          </div>` : ""}
-        ${opts.length || isMcqLike ? `<div class="form-row"><label>Options (comma-separated)</label><input id="ed_options_${q.id}" value="${opts.join(", ")}"></div>` : ""}
-        ${q.type === "mcq" ? `<div class="form-row"><label>Correct Answer</label><input id="ed_correct_${q.id}" value="${q.correct_answer || ""}"></div>` : ""}
-        ${q.type === "mcq_multi" ? `<div class="form-row"><label>Correct Answers (comma-separated)</label><input id="ed_correctMulti_${q.id}" value="${correctAnswers.join(", ")}"></div>` : ""}
+        <div class="form-row"><label>Subject (only used for Knowledge MCQ types)</label>
+          <select id="ed_subject_${q.id}">
+            <option value="" ${!q.subject?"selected":""}>—</option>
+            <option ${q.subject==="Science"?"selected":""}>Science</option>
+            <option ${q.subject==="Maths"?"selected":""}>Maths</option>
+            <option ${q.subject==="English"?"selected":""}>English</option>
+            <option ${q.subject==="Computer"?"selected":""}>Computer</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Concept (only used for Knowledge MCQ types)</label><input id="ed_concept_${q.id}" value="${q.concept || ""}"></div>
+        <div class="form-row"><label>Chapter</label><input id="ed_chapter_${q.id}" value="${q.chapter || ""}"></div>
+        <div class="form-row"><label>Difficulty (only used for Knowledge MCQ types)</label>
+          <select id="ed_difficulty_${q.id}">
+            <option value="" ${!q.difficulty?"selected":""}>—</option>
+            <option value="basic" ${q.difficulty==="basic"?"selected":""}>Basic</option>
+            <option value="medium" ${q.difficulty==="medium"?"selected":""}>Medium</option>
+            <option value="hard" ${q.difficulty==="hard"?"selected":""}>Hard</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Options (comma-separated — used by all choice-based types)</label><input id="ed_options_${q.id}" value="${opts.join(", ")}"></div>
+        <div class="form-row"><label>Correct Answer (only for single-answer MCQ — must match one option exactly)</label><input id="ed_correct_${q.id}" value="${q.correct_answer || ""}"></div>
+        <div class="form-row"><label>Correct Answers (only for multi-select MCQ — comma-separated, must match options exactly)</label><input id="ed_correctMulti_${q.id}" value="${correctAnswers.join(", ")}"></div>
         <div style="display:flex;gap:8px;margin-top:4px;">
           <button class="btn btn-primary" id="save_${q.id}">Save</button>
           <button class="btn" style="background:var(--surface);border:1px solid var(--border);" id="cancel_${q.id}">Cancel</button>

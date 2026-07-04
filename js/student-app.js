@@ -247,36 +247,45 @@ async function submitQuestionnaire() {
     return;
   }
 
-  const result = computeScores(responseRows, state.questions);
-  screenResults(result);
+  const conceptResult = computeScores(responseRows, state.questions); // gives confidenceIndex10 (Section A self-rating)
+  const subjectResult = computeSubjectScores(responseRows, state.questions); // statistically meaningful per-subject %
+  screenResults(subjectResult, conceptResult.confidenceIndex10);
 }
 
 // ---------- Screen: Results ----------
-function screenResults(result) {
-  const level = overallLevel(result.overallScore10);
-  const weakConcepts = result.conceptScores.filter(c => c.weak && c.attempted);
-  const strongConcepts = result.conceptScores.filter(c => !c.weak && c.attempted);
+function screenResults(subjectResult, confidenceIndex10) {
+  const level = overallLevel(subjectResult.overallScore10);
+  const subjects = subjectResult.subjects; // sorted weakest-first
+  const weakSubjects = subjects.filter(s => s.score10 < 6);
+  const totalCorrect = subjects.reduce((a, s) => a + s.correct, 0);
+  const totalQ = subjects.reduce((a, s) => a + s.total, 0);
 
   appEl.innerHTML = `
     <div class="card score-hero">
       <h1 class="student-h">${t().finishTitle}</h1>
       <p class="sub">${t().finishSub}</p>
-      <div class="score-num">${result.overallScore10}</div>
-      <div class="score-max">${t().outOf10} — ${level.label}</div>
+      ${donutSvg(subjectResult.overallScore10 * 10, level.color, `${totalCorrect}/${totalQ}`, "correct")}
+      <div class="score-max">${t().yourScore}: ${subjectResult.overallScore10} ${t().outOf10} — ${level.label}</div>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;">${t().strengths}</h3>
-      ${strongConcepts.length ? strongConcepts.map(c => conceptBar(c)).join("") : `<p class="sub">—</p>`}
-      <h3>${t().weakSpots}</h3>
-      ${weakConcepts.length ? weakConcepts.map(c => conceptBar(c)).join("") : `<p class="sub">${t().noWeak}</p>`}
+      <h3 style="margin-top:0;">Confidence vs. Actual Performance</h3>
+      <p class="sub" style="margin-bottom:14px;">How sure you felt vs. how you actually scored — this gap is exactly what this research is trying to find.</p>
+      ${compareBar("How confident you feel", confidenceIndex10)}
+      ${compareBar("How you actually scored", subjectResult.overallScore10)}
     </div>
 
-    ${weakConcepts.length ? `
+    <div class="card">
+      <h3 style="margin-top:0;">Subject-wise Performance</h3>
+      ${subjects.map(s => subjectBar(s)).join("")}
+    </div>
+
+    ${weakSubjects.length ? `
     <div class="card">
       <h3 style="margin-top:0;">${t().recommendation}</h3>
-      ${weakConcepts.map(c => `<div class="rec-card">${recommendationFor(c.concept, state.lang)}</div>`).join("")}
-    </div>` : ""}
+      ${weakSubjects.map(s => `<div class="rec-card">${recommendationForSubject(s.subject, [...new Set(s.weakConcepts)], state.lang)}</div>`).join("")}
+    </div>` : `
+    <div class="card"><p class="sub">${t().noWeak}</p></div>`}
 
     <div class="card" style="text-align:center;">
       <p class="sub">${t().thankYou}</p>
@@ -286,13 +295,35 @@ function screenResults(result) {
   document.getElementById("doneBtn").onclick = () => { window.location.href = "index.html"; };
 }
 
-function conceptBar(c) {
-  const color = c.score10 >= 8 ? "#1E8A5F" : c.score10 >= 5 ? "#D98A2B" : "#C64B4B";
+function subjectBar(s) {
+  const color = s.score10 >= 8 ? "#1E8A5F" : s.score10 >= 5 ? "#D98A2B" : "#C64B4B";
   return `
     <div class="concept-bar-row">
-      <div class="concept-bar-label"><span>${c.concept}</span><span>${c.score10}/10</span></div>
-      <div class="concept-bar-track"><div class="concept-bar-fill" style="width:${c.score10*10}%;background:${color};"></div></div>
+      <div class="concept-bar-label"><span>${s.subject}</span><span>${s.correct}/${s.total} · ${s.score10}/10</span></div>
+      <div class="concept-bar-track"><div class="concept-bar-fill" style="width:${s.score10*10}%;background:${color};"></div></div>
     </div>`;
+}
+
+function compareBar(label, score10) {
+  const color = score10 >= 8 ? "#1E8A5F" : score10 >= 5 ? "#D98A2B" : "#C64B4B";
+  return `
+    <div class="concept-bar-row">
+      <div class="concept-bar-label"><span>${label}</span><span>${score10}/10</span></div>
+      <div class="concept-bar-track"><div class="concept-bar-fill" style="width:${score10*10}%;background:${color};"></div></div>
+    </div>`;
+}
+
+function donutSvg(pct, color, centerBig, centerSmall) {
+  const r = 60, c = 2 * Math.PI * r;
+  const filled = (pct / 100) * c;
+  return `
+    <svg viewBox="0 0 150 150" style="width:150px;height:150px;margin:10px auto;display:block;">
+      <circle cx="75" cy="75" r="${r}" fill="none" stroke="#EAE2CF" stroke-width="16"/>
+      <circle cx="75" cy="75" r="${r}" fill="none" stroke="${color}" stroke-width="16"
+        stroke-dasharray="${filled} ${c-filled}" stroke-linecap="round" transform="rotate(-90 75 75)"/>
+      <text x="75" y="72" text-anchor="middle" font-size="26" font-weight="800" fill="#23302B" font-family="'Baloo 2',sans-serif">${centerBig}</text>
+      <text x="75" y="92" text-anchor="middle" font-size="12" fill="#6a756f" font-family="'Baloo 2',sans-serif">${centerSmall}</text>
+    </svg>`;
 }
 
 // Boot

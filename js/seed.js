@@ -1,6 +1,13 @@
 const logEl = document.getElementById("log");
 function log(msg) { logEl.textContent += msg + "\n"; }
 
+supabaseClient.auth.getSession().then(({ data: { session } }) => {
+  if (!session) {
+    document.getElementById("authGate").style.display = "block";
+    document.getElementById("seedBtn").disabled = true;
+  }
+});
+
 function rowsForStandard(standard, bank) {
   const rows = [];
   let order = 0;

@@ -63,21 +63,25 @@ function computeSubjectScores(responses, questions) {
     const w = DIFFICULTY_WEIGHT[q.difficulty] || 1;
     bySubject[subj].possible += w;
     bySubject[subj].total += 1;
-    if (r.is_correct) { bySubject[subj].earned += w; }
+    if (r.is_correct) { bySubject[subj].earned += w; bySubject[subj].correct += 1; }
     else { bySubject[subj].weakConcepts.push(q.concept); }
   });
 
   const subjects = Object.keys(bySubject).map(subj => {
     const s = bySubject[subj];
-    const score10 = s.possible > 0 ? Math.round((s.earned / s.possible) * 100) / 10 : 0;
-    return { subject: subj, score10, correct: s.correct, total: s.total, weakConcepts: s.weakConcepts };
-  }).sort((a, b) => a.score10 - b.score10);
+    const score10 = s.possible > 0 ? Math.round((s.earned / s.possible) * 100) / 10 : 0; // difficulty-weighted (for research/admin use)
+    const pct = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0; // plain % correct (for student-facing display)
+    return { subject: subj, score10, pct, correct: s.correct, total: s.total, weakConcepts: s.weakConcepts };
+  }).sort((a, b) => a.pct - b.pct);
 
+  const totalCorrect = subjects.reduce((a, s) => a + s.correct, 0);
+  const totalQ = subjects.reduce((a, s) => a + s.total, 0);
+  const overallPct = totalQ > 0 ? Math.round((totalCorrect / totalQ) * 100) : 0;
   const overallScore10 = subjects.length
     ? Math.round((subjects.reduce((s, c) => s + c.score10, 0) / subjects.length) * 10) / 10
     : 0;
 
-  return { subjects, overallScore10 };
+  return { subjects, overallScore10, overallPct, totalCorrect, totalQ };
 }
 
 // One consolidated recommendation per weak SUBJECT, naming the specific weak concepts inside it
@@ -108,7 +112,12 @@ function overallLevel(score10) {
   if (score10 >= 5) return { label: "Developing", color: "#D98A2B" };
   return { label: "Needs Support", color: "#C64B4B" };
 }
+function overallLevelPct(pct) {
+  if (pct >= 80) return { label: "Strong", color: "#1E8A5F" };
+  if (pct >= 50) return { label: "Developing", color: "#D98A2B" };
+  return { label: "Needs Support", color: "#C64B4B" };
+}
 
 if (typeof module !== "undefined") {
-  module.exports = { computeScores, computeSubjectScores, recommendationFor, recommendationForSubject, overallLevel };
+  module.exports = { computeScores, computeSubjectScores, recommendationFor, recommendationForSubject, overallLevel, overallLevelPct };
 }

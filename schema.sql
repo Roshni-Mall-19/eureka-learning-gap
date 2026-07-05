@@ -58,28 +58,46 @@ create index if not exists idx_responses_question on responses(question_id);
 create index if not exists idx_questions_standard on questions(standard);
 
 -- ============================================================
--- Row Level Security
--- Hackathon-simple setup: anon key can insert students/responses (needed for
--- the student questionnaire, which has no login) and read/write questions
--- (needed for the admin dashboard, which also has no login in this v1).
--- NOTE: For a public production deployment, put the admin dashboard behind
--- Supabase Auth and restrict these policies to authenticated users only.
+-- Row Level Security — REAL security this time.
+-- Anonymous visitors (i.e. anyone using student.html, which has no login) can only:
+--   - INSERT a new student + their responses (needed to submit the questionnaire)
+--   - SELECT (read) questions (needed to load the test)
+-- They CANNOT read student data, responses, or edit the question bank.
+-- Only a logged-in admin (via Supabase Auth — see README "Admin dashboard login") can read
+-- students/responses or add/edit/delete questions. This matters because the anon key is
+-- necessarily public (it's embedded in js/supabase-client.js) — real protection has to come
+-- from these database-level policies, not from a password check in JavaScript alone.
 -- ============================================================
 
 alter table students enable row level security;
 alter table questions enable row level security;
 alter table responses enable row level security;
 
+drop policy if exists "anon can insert students" on students;
+drop policy if exists "anon can read students" on students;
+drop policy if exists "anon can read questions" on questions;
+drop policy if exists "anon can insert questions" on questions;
+drop policy if exists "anon can update questions" on questions;
+drop policy if exists "anon can delete questions" on questions;
+drop policy if exists "anon can insert responses" on responses;
+drop policy if exists "anon can read responses" on responses;
+
+-- Students table: anyone can submit a new student record; only logged-in admins can read them
 create policy "anon can insert students" on students for insert to anon with check (true);
-create policy "anon can read students" on students for select to anon using (true);
+create policy "authenticated can read students" on students for select to authenticated using (true);
+create policy "authenticated can update students" on students for update to authenticated using (true);
+create policy "authenticated can delete students" on students for delete to authenticated using (true);
+create policy "authenticated can read questions" on questions for select to authenticated using (true);
 
+-- Questions table: anyone taking the test needs to read questions; only admins manage the bank
 create policy "anon can read questions" on questions for select to anon using (true);
-create policy "anon can insert questions" on questions for insert to anon with check (true);
-create policy "anon can update questions" on questions for update to anon using (true);
-create policy "anon can delete questions" on questions for delete to anon using (true);
+create policy "authenticated can insert questions" on questions for insert to authenticated with check (true);
+create policy "authenticated can update questions" on questions for update to authenticated using (true);
+create policy "authenticated can delete questions" on questions for delete to authenticated using (true);
 
+-- Responses table: anyone can submit answers; only logged-in admins can read/analyze them
 create policy "anon can insert responses" on responses for insert to anon with check (true);
-create policy "anon can read responses" on responses for select to anon using (true);
+create policy "authenticated can read responses" on responses for select to authenticated using (true);
 
 -- ============================================================
 -- Enable Realtime (so the admin dashboard updates live as students submit)

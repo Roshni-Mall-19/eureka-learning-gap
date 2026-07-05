@@ -111,7 +111,7 @@ function screenDetails() {
       <label class="field-label">${t().name}</label>
       <input class="field" id="fName" type="text">
       <label class="field-label">${t().age}</label>
-      <input class="field" id="fAge" type="number" min="10" max="20" inputmode="numeric">
+      <input class="field" id="fAge" type="number" min="12" max="18" inputmode="numeric">
       <label class="field-label">${t().gender}</label>
       <select class="field" id="fGender"><option value="">--</option><option value="Male">${t().male}</option><option value="Female">${t().female}</option></select>
       <label class="field-label">${t().school}</label>
@@ -135,7 +135,7 @@ function screenDetails() {
       return;
     }
     // Sanity bound: no 0, no negative, no unrealistic values (students here are roughly 10-20 yrs old)
-    if (!Number.isFinite(age) || !Number.isInteger(age) || age < 10 || age > 20) {
+    if (!Number.isFinite(age) || !Number.isInteger(age) || age < 12 || age > 18) {
       errEl.textContent = t().invalidAge;
       errEl.style.display = "block";
       return;

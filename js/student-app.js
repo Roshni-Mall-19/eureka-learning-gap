@@ -14,6 +14,23 @@ const state = {
 function t() { return UI_TEXT[state.lang]; }
 function applyLangAttrs() { bodyEl.setAttribute("lang", state.lang); brandText.textContent = t().appTitle; }
 
+// ---------- Accessibility: read-aloud (built into the browser, no external service needed) ----------
+function speak(text) {
+  if (!("speechSynthesis" in window) || !text) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = state.lang === "hi" ? "hi-IN" : state.lang === "mr" ? "mr-IN" : "en-IN";
+  window.speechSynthesis.speak(u);
+}
+
+// ---------- Accessibility: font-size toggle (cycles through 3 sizes app-wide) ----------
+const FONT_SCALES = [16, 19, 23];
+let fontScaleIdx = 0;
+document.getElementById("fontToggleBtn").addEventListener("click", () => {
+  fontScaleIdx = (fontScaleIdx + 1) % FONT_SCALES.length;
+  document.documentElement.style.fontSize = FONT_SCALES[fontScaleIdx] + "px";
+});
+
 // ---------- Screen: Language select ----------
 function screenLang() {
   applyLangAttrs();
@@ -26,7 +43,28 @@ function screenLang() {
         <button class="lang-btn" data-l="mr">मराठी</button>
       </div>
     </div>`;
-  appEl.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => { state.lang = b.dataset.l; screenWelcome(); });
+  appEl.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => { state.lang = b.dataset.l; screenConsent(); });
+}
+
+// ---------- Screen: Consent (research ethics — shown before any data is collected) ----------
+function screenConsent() {
+  applyLangAttrs();
+  appEl.innerHTML = `
+    <div class="card">
+      <h1 class="student-h">${t().consentTitle}</h1>
+      <button class="speak-btn" id="speakConsent">🔊 ${t().readAloud}</button>
+      <p class="sub">${t().consentBody}</p>
+      <label class="consent-check-row">
+        <input type="checkbox" id="consentBox">
+        <span>${t().consentCheck}</span>
+      </label>
+      <button class="big-btn" id="consentNext" disabled style="opacity:.4;">${t().start}</button>
+    </div>`;
+  document.getElementById("speakConsent").onclick = () => speak(t().consentBody);
+  const box = document.getElementById("consentBox");
+  const btn = document.getElementById("consentNext");
+  box.onchange = () => { btn.disabled = !box.checked; btn.style.opacity = box.checked ? "1" : ".4"; };
+  btn.onclick = () => { if (box.checked) screenWelcome(); };
 }
 
 // ---------- Screen: Welcome ----------
@@ -35,9 +73,11 @@ function screenWelcome() {
   appEl.innerHTML = `
     <div class="card">
       <h1 class="student-h">${t().welcome}</h1>
+      <button class="speak-btn" id="speakWelcome">🔊 ${t().readAloud}</button>
       <p class="sub">${t().welcomeSub}</p>
       <button class="big-btn" id="startBtn">${t().start}</button>
     </div>`;
+  document.getElementById("speakWelcome").onclick = () => speak(t().welcomeSub);
   document.getElementById("startBtn").onclick = screenStandard;
 }
 
@@ -160,12 +200,17 @@ function screenQuestion() {
     <div class="progress-label">${t().progress} ${state.qIndex+1} ${t().of} ${total}</div>
     <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
     <span class="section-tag">${t()[SECTION_TITLES[q.type]]}</span>
-    <div class="card">${bodyHtml}</div>
+    <div class="card">
+      <button class="speak-btn" id="speakQ">🔊 ${t().readAloud}</button>
+      ${bodyHtml}
+    </div>
     <div style="display:flex;gap:10px;">
       ${state.qIndex > 0 ? `<button class="big-btn alt" id="backBtn" style="flex:1;">${t().back}</button>` : ""}
       <button class="big-btn" id="nextBtn" style="flex:2;">${state.qIndex === total-1 ? t().submit : t().next}</button>
     </div>
     <p id="qErr" style="color:#C64B4B;font-weight:600;display:none;">${t().required}</p>`;
+
+  document.getElementById("speakQ").onclick = () => speak(qText);
 
   if (q.type === "likert") {
     appEl.querySelectorAll('input[name="likert"]').forEach(r => r.onchange = () => { state.answers[q.id] = r.value; });
@@ -249,11 +294,11 @@ async function submitQuestionnaire() {
 
   const conceptResult = computeScores(responseRows, state.questions); // gives confidenceIndex10 (Section A self-rating)
   const subjectResult = computeSubjectScores(responseRows, state.questions); // statistically meaningful per-subject %
-  screenResults(subjectResult, conceptResult.confidenceIndex10);
+  screenResults(subjectResult, conceptResult.confidenceIndex10, responseRows);
 }
 
 // ---------- Screen: Results ----------
-function screenResults(subjectResult, confidenceIndex10) {
+function screenResults(subjectResult, confidenceIndex10, responseRows) {
   const level = overallLevel(subjectResult.overallScore10);
   const subjects = subjectResult.subjects; // sorted weakest-first
   const weakSubjects = subjects.filter(s => s.score10 < 6);
@@ -261,7 +306,7 @@ function screenResults(subjectResult, confidenceIndex10) {
   const totalQ = subjects.reduce((a, s) => a + s.total, 0);
 
   appEl.innerHTML = `
-    <div class="card score-hero">
+    <div class="card score-hero" id="reportTop">
       <h1 class="student-h">${t().finishTitle}</h1>
       <p class="sub">${t().finishSub}</p>
       ${donutSvg(subjectResult.overallScore10 * 10, level.color, `${totalCorrect}/${totalQ}`, "correct")}
@@ -287,12 +332,49 @@ function screenResults(subjectResult, confidenceIndex10) {
     </div>` : `
     <div class="card"><p class="sub">${t().noWeak}</p></div>`}
 
+    <div class="card">
+      <h3 style="margin-top:0;">${t().myAnswers}</h3>
+      ${answerReviewHtml(responseRows)}
+    </div>
+
     <div class="card" style="text-align:center;">
       <p class="sub">${t().thankYou}</p>
-      <button class="big-btn" id="doneBtn">${t().finishBtn}</button>
+      <button class="big-btn" id="downloadBtn" style="margin-bottom:10px;">📄 ${t().downloadReport}</button>
+      <button class="big-btn alt" id="doneBtn">${t().finishBtn}</button>
     </div>`;
 
+  document.getElementById("downloadBtn").onclick = () => window.print();
   document.getElementById("doneBtn").onclick = () => { window.location.href = "index.html"; };
+}
+
+// Full answer review: shows every scored question with the student's answer, whether it was
+// correct, and the correct answer if they got it wrong — so they can actually learn from the test.
+function answerReviewHtml(responseRows) {
+  const qMap = {}; state.questions.forEach(q => { qMap[q.id] = q; });
+  return responseRows.map(r => {
+    const q = qMap[r.question_id];
+    if (!q) return "";
+    const qText = q["question_" + state.lang] || q.question_en;
+    if (q.type === "mcq" || q.type === "mcq_multi") {
+      let correctText = q.correct_answer || "";
+      if (!correctText && q.correct_answers) {
+        try { correctText = (typeof q.correct_answers === "string" ? JSON.parse(q.correct_answers) : q.correct_answers).join(", "); } catch (e) {}
+      }
+      return `
+        <div class="answer-row">
+          <div class="answer-q">${qText} <span class="answer-badge ${r.is_correct ? "ok" : "bad"}">${r.is_correct ? t().correct : t().incorrect}</span></div>
+          <div class="answer-you">${t().yourAnswer}: ${r.answer_value || "—"}</div>
+          ${!r.is_correct ? `<div class="answer-correct">${t().correctAnswer}: ${correctText}</div>` : ""}
+        </div>`;
+    } else if (q.type === "likert") {
+      return `<div class="answer-row"><div class="answer-q">${qText}</div><div class="answer-you">${r.answer_value}/5</div></div>`;
+    } else if (q.type === "text") {
+      if (!r.answer_value) return "";
+      return `<div class="answer-row"><div class="answer-q">${qText}</div><div class="answer-you">${r.answer_value}</div></div>`;
+    } else {
+      return `<div class="answer-row"><div class="answer-q">${qText}</div><div class="answer-you">${r.answer_value || "—"}</div></div>`;
+    }
+  }).join("");
 }
 
 function subjectBar(s) {

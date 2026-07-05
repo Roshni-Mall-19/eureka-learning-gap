@@ -71,6 +71,52 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 });
 document.getElementById("exportBtn").addEventListener("click", exportExcel);
 
+// Mobile sidebar toggle (hamburger button — sidebar is translateX(-100%) below 780px)
+const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+const sidebarEl = document.querySelector(".sidebar");
+function openSidebar() { sidebarEl.classList.add("open"); sidebarBackdrop.classList.add("show"); }
+function closeSidebar() { sidebarEl.classList.remove("open"); sidebarBackdrop.classList.remove("show"); }
+if (mobileMenuBtn) mobileMenuBtn.onclick = openSidebar;
+if (sidebarBackdrop) sidebarBackdrop.onclick = closeSidebar;
+document.querySelectorAll(".nav-item").forEach(a => a.addEventListener("click", closeSidebar));
+
+// ================= Modal (used by clickable stat cards + "View Response") =================
+function ensureModalRoot() {
+  if (document.getElementById("modalOverlay")) return;
+  const div = document.createElement("div");
+  div.id = "modalOverlay";
+  div.className = "modal-overlay hidden";
+  div.innerHTML = `
+    <div class="modal-box" id="modalBox">
+      <div class="modal-header">
+        <h3 id="modalTitle"></h3>
+        <button class="modal-close" id="modalCloseBtn" title="Close">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>`;
+  document.body.appendChild(div);
+  div.addEventListener("click", (e) => { if (e.target === div) closeModal(); });
+  document.getElementById("modalCloseBtn").onclick = closeModal;
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+}
+function openModal(title, html) {
+  ensureModalRoot();
+  document.getElementById("modalTitle").textContent = title;
+  document.getElementById("modalBody").innerHTML = html;
+  document.getElementById("modalOverlay").classList.remove("hidden");
+  document.getElementById("modalBox").scrollTop = 0;
+  // Any "View Response" buttons rendered inside a modal (e.g. a student list) should open
+  // that student's full response — wired here so it works no matter which modal opened it.
+  document.querySelectorAll("#modalBody [data-view-resp]").forEach(b => {
+    b.onclick = () => openStudentResponseModal(b.dataset.viewResp);
+  });
+}
+function closeModal() {
+  const el = document.getElementById("modalOverlay");
+  if (el) el.classList.add("hidden");
+}
+
 // Filter bar (Class + School) — rendered inside the page body on Overview/Students tabs, rather than
 // cramming more controls into the topbar.
 function filterBarHtml() {
@@ -151,6 +197,35 @@ function buildResponseRows(students, questions, responses, standardFilter) {
     });
 }
 
+// Wide, "Google Forms style" export — ONE ROW PER STUDENT, one column per question (Q1, Q2, ... Qn),
+// in the exact order questions appear in the app. Automatically picks up any question added later
+// (no hardcoded question count), since the columns are built fresh from the current question bank.
+function buildWideDataRows(students, questions, responses, standard) {
+  const qs = questions.filter(q => q.standard === standard).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+  const respByStudent = {};
+  responses.forEach(r => {
+    if (!respByStudent[r.student_id]) respByStudent[r.student_id] = {};
+    respByStudent[r.student_id][r.question_id] = r;
+  });
+  return students.filter(s => s.standard === standard).map(s => {
+    const row = {
+      "Student Name": s.name, "Age": s.age || "", "Gender": s.gender || "", "Class": s.standard,
+      "School": s.school_name || "", "Area": s.area || "", "Language Used": s.language_used || "",
+      "Submitted At": s.created_at ? new Date(s.created_at).toLocaleString() : ""
+    };
+    const sResp = respByStudent[s.id] || {};
+    qs.forEach((q, idx) => {
+      const r = sResp[q.id];
+      const label = `Q${idx + 1}: ${(q.question_en || "").slice(0, 60)}`;
+      row[label] = r ? (r.answer_value || "") : "";
+      if (q.type === "mcq" || q.type === "mcq_multi") {
+        row[label + " — Correct?"] = r ? (r.is_correct ? "Yes" : "No") : "";
+      }
+    });
+    return row;
+  });
+}
+
 function exportExcel() {
   if (typeof XLSX === "undefined") { alert("Excel export library failed to load — check your internet connection and try again."); return; }
   const allStudents = adminState.students;
@@ -158,6 +233,13 @@ function exportExcel() {
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildSummaryRows(allStudents)), "Summary (All Students)");
 
+  // Complete data, Google-Forms style: one row per student, every question as its own column (1 to N).
+  ["8", "9", "10"].forEach(std => {
+    const wideRows = buildWideDataRows(allStudents, adminState.questions, adminState.responses, std);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(wideRows.length ? wideRows : [{ Note: "No responses yet for this class" }]), `Std ${std} Complete Data`);
+  });
+
+  // Long format (one row per answer) — easier for pivot tables / statistical analysis in Excel.
   ["8", "9", "10"].forEach(std => {
     const rows = buildResponseRows(allStudents, adminState.questions, adminState.responses, std);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No responses yet for this class" }]), `Std ${std} Responses`);
@@ -230,7 +312,7 @@ function allConceptEntries(students) {
     sc.conceptScores.forEach(c => {
       if (c.attempted) {
         const q = adminState.questions.find(q => q.concept === c.concept && q.standard === s.standard);
-        rows.push({ concept: c.concept, score10: c.score10, standard: s.standard, name: s.name, area: s.area, subject: q ? q.subject : null });
+        rows.push({ concept: c.concept, score10: c.score10, standard: s.standard, name: s.name, area: s.area, gender: s.gender, subject: q ? q.subject : null });
       }
     });
   });
@@ -263,246 +345,438 @@ function render() {
   else if (adminState.tab === "questions") renderQuestions();
 }
 
-// ================= OVERVIEW =================
+const MIN_STUDENTS_FOR_INSIGHTS = 10;
+const INSUFFICIENT_DATA_MSG = "More assessments are needed before reliable class-level insights can be generated.";
+
+// ================= OVERVIEW (research-focused redesign) =================
 function renderOverview() {
   const students = visibleStudents();
   const conceptEntries = allConceptEntries(students);
-  const conceptStats = aggregateConceptStats(conceptEntries); // ONE row per concept, averaged across students
-  const gapConcepts = conceptStats.filter(c => c.avgPct < 70); // anything below 70% class-average counts as a "gap"
-  const scores = students.map(s => studentSubjectScore(s.id).overallPct);
-  const avgPct = scores.length ? Math.round(scores.reduce((a, c) => a + c, 0) / scores.length) : 0;
+  const conceptStats = aggregateConceptStats(conceptEntries);
+  const enough = students.length >= MIN_STUDENTS_FOR_INSIGHTS;
 
-  document.getElementById("navGapCount").textContent = gapConcepts.length;
+  // Per-student overall % (plain, unweighted — matches what students themselves see)
+  const studentPcts = students.map(s => ({ s, pct: studentSubjectScore(s.id).overallPct }));
+  const avgPct = studentPcts.length ? Math.round(studentPcts.reduce((a, x) => a + x.pct, 0) / studentPcts.length) : 0;
+  const needingSupport = studentPcts.filter(x => x.pct < 70).length;
 
-  // Topic performance grouped by standard (already a proper per-concept average — this panel was correct before)
-  function topicGroup(std) {
-    const entries = conceptEntries.filter(c => c.standard === std);
-    const agg = {};
-    entries.forEach(e => { if (!agg[e.concept]) agg[e.concept] = { sum: 0, n: 0 }; agg[e.concept].sum += e.score10; agg[e.concept].n += 1; });
-    return Object.keys(agg).map(k => ({ concept: k, pct: Math.round((agg[k].sum / agg[k].n) * 10) })).sort((a, b) => a.pct - b.pct).slice(0, 6);
-  }
-  function topicRowsHtml(std) {
-    const rows = topicGroup(std);
-    if (!rows.length) return `<p style="font-size:12px;color:var(--ink-muted);margin-bottom:8px;">No responses yet for this class.</p>`;
-    return rows.map(r => `
-      <div class="topic-row">
-        <span class="topic-label">${r.concept}</span>
-        <div class="topic-bar-wrap"><div class="topic-bar-fill" style="width:${r.pct}%;background:${pctColor(r.pct)}"></div></div>
-        <span class="topic-pct" style="color:${pctColor(r.pct)}">${r.pct}%</span>
-      </div>`).join("");
-  }
-
-  // Gap severity donut — now built from the AGGREGATED per-concept average, not raw per-student instances,
-  // so "Needs work" / "Borderline" can actually populate (a concept only lands in "Critical" if the class
-  // AVERAGE on it is genuinely below 40%, not just because one student got one question wrong).
-  const critical = gapConcepts.filter(c => c.avgPct < 40).length;
-  const needsWork = gapConcepts.filter(c => c.avgPct >= 40 && c.avgPct < 60).length;
-  const borderline = gapConcepts.filter(c => c.avgPct >= 60 && c.avgPct < 70).length;
-  const totalGaps = gapConcepts.length || 1;
-  const circumference = 345.4;
-  const critLen = (critical / totalGaps) * circumference;
-  const needsLen = (needsWork / totalGaps) * circumference;
-  const borderLen = (borderline / totalGaps) * circumference;
-
-  const recentGaps = [...gapConcepts].sort((a, b) => a.avgPct - b.avgPct).slice(0, 7);
-  const recentStudents = [...students].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
-
-  const smallSampleWarning = students.length > 0 && students.length < 5 ? `
-    <div style="background:var(--amber-soft);border:1px solid #F5D9A8;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12.5px;color:#8A5A0F;">
-      ⚠️ Only <b>${students.length}</b> student${students.length===1?"":"s"} assessed so far — percentages below are indicative only, not yet statistically reliable. They'll firm up as more students are tested.
-    </div>` : "";
+  const subjectPerf = computeSubjectPerformance(conceptEntries);
+  const topGaps = [...conceptStats].filter(c => c.avgPct < 70).sort((a, b) => a.avgPct - b.avgPct);
+  const criticalGaps = topGaps.filter(g => g.avgPct < 40).length;
+  document.getElementById("navGapCount").textContent = topGaps.length;
+  const strongestSubj = subjectPerf.length ? subjectPerf.reduce((a, b) => a.avgPct > b.avgPct ? a : b) : null;
+  const weakestSubj = subjectPerf.length ? subjectPerf.reduce((a, b) => a.avgPct < b.avgPct ? a : b) : null;
 
   pageBody.innerHTML = `
     ${filterBarHtml()}
-    ${smallSampleWarning}
+
     <div class="stats-grid">
-      <div class="stat-card blue">
+      <div class="stat-card blue clickable" id="statTotal">
         <div class="stat-top"><div class="stat-icon blue">👨‍🎓</div></div>
         <div class="stat-num">${students.length}</div>
-        <div class="stat-label">Total students assessed</div>
+        <div class="stat-label">Total Students Assessed</div>
+        <div class="stat-hint">Click to view all →</div>
       </div>
-      <div class="stat-card teal">
-        <div class="stat-top"><div class="stat-icon teal">📋</div></div>
-        <div class="stat-num">${students.length}</div>
-        <div class="stat-label">Assessments completed</div>
+      <div class="stat-card teal clickable" id="statAvg">
+        <div class="stat-top"><div class="stat-icon teal">🎯</div></div>
+        <div class="stat-num">${students.length ? avgPct + "%" : "—"}</div>
+        <div class="stat-label">Average Assessment Score</div>
+        <div class="stat-hint">Click to view all →</div>
       </div>
-      <div class="stat-card amber">
-        <div class="stat-top"><div class="stat-icon amber">⚠️</div></div>
-        <div class="stat-num">${gapConcepts.length}</div>
-        <div class="stat-label">Distinct concepts below 70% class avg</div>
+      ${enough ? `
+      <div class="stat-card amber clickable" id="statSupport">
+        <div class="stat-top"><div class="stat-icon amber">🤝</div></div>
+        <div class="stat-num">${needingSupport}</div>
+        <div class="stat-label">Students Needing Support</div>
+        <div class="stat-hint">Click to view list →</div>
       </div>
-      <div class="stat-card red">
-        <div class="stat-top"><div class="stat-icon red">🎯</div></div>
-        <div class="stat-num">${avgPct}<span style="font-size:18px;color:var(--ink-muted)">%</span></div>
-        <div class="stat-label">Average score, all classes</div>
+      <div class="stat-card red clickable" id="statCritical">
+        <div class="stat-top"><div class="stat-icon red">⚠️</div></div>
+        <div class="stat-num">${criticalGaps}</div>
+        <div class="stat-label">Critical Learning Gaps</div>
+        <div class="stat-hint">Click to view list →</div>
       </div>
+      <div class="stat-card teal clickable" id="statStrong">
+        <div class="stat-top"><div class="stat-icon teal">💪</div></div>
+        <div class="stat-num" style="font-size:20px;">${strongestSubj ? strongestSubj.subject : "—"}</div>
+        <div class="stat-label">Strongest Subject</div>
+        <div class="stat-hint">Click for details →</div>
+      </div>
+      <div class="stat-card amber clickable" id="statWeak">
+        <div class="stat-top"><div class="stat-icon amber">📌</div></div>
+        <div class="stat-num" style="font-size:20px;">${weakestSubj ? weakestSubj.subject : "—"}</div>
+        <div class="stat-label">Weakest Subject</div>
+        <div class="stat-hint">Click for details →</div>
+      </div>` : ""}
     </div>
 
-    <div class="mid-grid">
-      <div class="card">
-        <div class="card-header"><span class="card-header-icon">📊</span><h3>Topic performance — by class</h3></div>
-        <div class="card-body">
-          <div class="topic-group-label">Class 8 topics</div>
-          ${topicRowsHtml("8")}
-          <div class="topic-group-label">Class 9 topics</div>
-          ${topicRowsHtml("9")}
-          <div class="topic-group-label">Class 10 topics</div>
-          ${topicRowsHtml("10")}
-        </div>
-      </div>
-
-      <div style="display:flex;flex-direction:column;gap:1rem;">
-        <div class="card">
-          <div class="card-header"><span class="card-header-icon">🍩</span><h3>Gap severity distribution</h3></div>
-          <div class="donut-wrap">
-            <svg class="donut-svg" viewBox="0 0 150 150">
-              <circle cx="75" cy="75" r="55" fill="none" stroke="#F0F1F8" stroke-width="22"/>
-              <circle cx="75" cy="75" r="55" fill="none" stroke="#D63B3B" stroke-width="22"
-                stroke-dasharray="${critLen} ${circumference-critLen}" stroke-dashoffset="0" transform="rotate(-90 75 75)"/>
-              <circle cx="75" cy="75" r="55" fill="none" stroke="#E08A1A" stroke-width="22"
-                stroke-dasharray="${needsLen} ${circumference-needsLen}" stroke-dashoffset="${-critLen}" transform="rotate(-90 75 75)"/>
-              <circle cx="75" cy="75" r="55" fill="none" stroke="#2E9E5B" stroke-width="22"
-                stroke-dasharray="${borderLen} ${circumference-borderLen}" stroke-dashoffset="${-(critLen+needsLen)}" transform="rotate(-90 75 75)"/>
-              <text x="75" y="70" text-anchor="middle" font-size="22" font-weight="700" fill="#1A1A2E" font-family="'Space Grotesk',sans-serif">${gapConcepts.length}</text>
-              <text x="75" y="87" text-anchor="middle" font-size="11" fill="#7B7B9D" font-family="'Inter',sans-serif">concepts w/ gaps</text>
-            </svg>
-            <div class="donut-legend">
-              <div class="legend-item"><div class="legend-dot" style="background:#D63B3B"></div><span class="legend-label">Critical (&lt;40% class avg)</span><span class="legend-val">${critical}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#E08A1A"></div><span class="legend-label">Needs work (40–60%)</span><span class="legend-val">${needsWork}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#2E9E5B"></div><span class="legend-label">Borderline (60–70%)</span><span class="legend-val">${borderline}</span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header"><span class="card-header-icon">🕒</span><h3>Recent submissions</h3></div>
-          <div class="card-body" style="padding-top:0.5rem">
-            ${recentStudents.length ? recentStudents.map(s => {
-              const pct = studentSubjectScore(s.id).overallPct;
-              const c = avatarColor(s.id);
-              return `<div class="session-item">
-                <div class="session-date" style="background:${c.bg};color:${c.fg}">${initials(s.name)}</div>
-                <div><div class="session-title">${s.name} · Std ${s.standard}</div><div class="session-sub">${s.school_name || "—"} · ${timeAgo(s.created_at)}</div></div>
-                <span class="session-chip" style="background:${pct<40?'var(--red-soft)':'var(--green-soft)'};color:${pctColor(pct)}">${pct}%</span>
-              </div>`;
-            }).join("") : `<div class="empty-state">No submissions yet.</div>`}
-          </div>
-        </div>
+    ${!enough ? insufficientDataCard(students.length) : `
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">📚</span><h3>Subject Performance</h3></div>
+      <div class="card-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;">
+        ${subjectPerf.map(sp => subjectPerfCard(sp)).join("")}
       </div>
     </div>
 
     <div class="card" style="margin-bottom:1.5rem;">
-      <div class="card-header"><span class="card-header-icon">📚</span><h3>Subject-wise performance — all classes</h3></div>
-      <div class="card-body">${subjectRowsHtml(conceptEntries)}</div>
+      <div class="card-header"><span class="card-header-icon">🚻</span><h3>Gender-wise Performance</h3></div>
+      <div style="padding:0.5rem 0.75rem 1rem;">${demographicTableHtml(groupPerfRows(students, "gender"))}</div>
     </div>
 
-    ${clusteringPanelHtml(students)}
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">🏘️</span><h3>Rural vs Urban Performance</h3></div>
+      <div style="padding:0.5rem 0.75rem 1rem;">${demographicTableHtml(groupPerfRows(students, "area"))}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">🔍</span><h3>Top Learning Gaps</h3></div>
+      <div style="padding:0 0.75rem;">
+        <table class="student-table">
+          <thead><tr><th>Concept</th><th>Subject</th><th>Class</th><th>Students Struggling</th><th>Avg Accuracy</th><th>Severity</th></tr></thead>
+          <tbody>
+            ${topGaps.length ? topGaps.slice(0, 10).map(g => topGapRow(g)).join("") : `<tr><td colspan="6" class="empty-state">No significant learning gaps detected.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">🤖</span><h3>AI Learning Gap Analysis</h3></div>
+      <div class="card-body">${aiAnalysisHtml(students)}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">✅</span><h3>Teacher Recommendations</h3></div>
+      <div class="card-body">${teacherRecommendationsHtml(subjectPerf, topGaps, studentPcts)}</div>
+    </div>`}
 
     <div class="bottom-grid">
       <div class="card">
-        <div class="card-header"><span class="card-header-icon">👩‍🎓</span><h3>Student roster</h3>
-          <div style="display:flex;gap:8px;align-items:center">
-            <span style="font-size:11px;color:var(--ink-muted)">Showing ${Math.min(8,students.length)} of ${students.length}</span>
-            <button class="card-action" id="viewAllBtn">View all</button>
-          </div>
-        </div>
+        <div class="card-header"><span class="card-header-icon">👩‍🎓</span><h3>Student List</h3></div>
         <div style="padding:0 0.75rem;">
           <table class="student-table">
-            <thead><tr><th>Student</th><th>Std</th><th>Score</th><th>Status</th></tr></thead>
-            <tbody>
-              ${students.slice(0, 8).map(s => studentRowHtml(s)).join("") || `<tr><td colspan="4" class="empty-state">No students yet — collect responses via student.html</td></tr>`}
-            </tbody>
+            <thead><tr><th>Student</th><th>Standard</th><th>Overall Score</th><th>Weakest Subject</th><th>Status</th></tr></thead>
+            <tbody>${students.length ? students.map(s => simpleStudentRow(s)).join("") : `<tr><td colspan="5" class="empty-state">No students yet — collect responses via student.html</td></tr>`}</tbody>
           </table>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-header"><span class="card-header-icon">🔍</span><h3>Recent gaps detected</h3></div>
-        <div class="card-body" style="padding-top:0.25rem">
-          ${recentGaps.length ? recentGaps.map(g => {
-            const sev = g.avgPct < 40 ? { label: "Critical", bg: "var(--red-soft)", fg: "var(--red)" } :
-                        g.avgPct < 60 ? { label: "Needs work", bg: "var(--amber-soft)", fg: "var(--amber)" } :
-                                        { label: "Borderline", bg: "var(--green-soft)", fg: "var(--green)" };
-            return `<div class="gap-item">
-              <div class="gap-type-dot" style="background:${sev.fg}"></div>
-              <div class="gap-content"><div class="gap-title">${g.concept}</div><div class="gap-meta">Class ${g.standard} · ${g.subject||""} · ${g.avgPct}% class accuracy (${g.studentsWrong}/${g.studentsTotal} students struggling)</div></div>
-              <span class="gap-severity" style="background:${sev.bg};color:${sev.fg}">${sev.label}</span>
-            </div>`;
-          }).join("") : `<div class="empty-state">No gaps detected yet.</div>`}
+        <div class="card-header"><span class="card-header-icon">🕒</span><h3>Recent Assessments</h3></div>
+        <div style="padding:0 0.75rem;">
+          <table class="student-table">
+            <thead><tr><th>Student</th><th>Standard</th><th>Overall Score</th><th>Weakest Subject</th></tr></thead>
+            <tbody>
+              ${[...students].sort((a,b) => new Date(b.created_at)-new Date(a.created_at)).slice(0,6).map(s => recentAssessmentRow(s)).join("") || `<tr><td colspan="4" class="empty-state">No assessments yet.</td></tr>`}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>`;
 
   wireFilterBar();
-  const viewAllBtn = document.getElementById("viewAllBtn");
-  if (viewAllBtn) viewAllBtn.onclick = () => {
-    document.querySelectorAll(".nav-item").forEach(x => x.classList.remove("active"));
-    document.querySelector('.nav-item[data-tab="students"]').classList.add("active");
-    adminState.tab = "students"; topbarTitle.textContent = TAB_TITLES.students; render();
-  };
+  wireOverviewCards({ students, studentPcts, topGaps, subjectPerf, strongestSubj, weakestSubj });
 }
 
-function subjectRowsHtml(conceptEntries) {
-  const subjects = ["Science", "Maths", "English", "Computer"];
-  const agg = {};
+// Wires clicks on the 6 stat cards to open a modal with the underlying data behind that number.
+function wireOverviewCards(ctx) {
+  const { students, studentPcts, topGaps, subjectPerf, strongestSubj, weakestSubj } = ctx;
+  const byId = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+
+  byId("statTotal", () => openModal("All Students Assessed", modalStudentTableHtml(students)));
+
+  byId("statAvg", () => {
+    const sorted = [...students].sort((a, b) => studentSubjectScore(b.id).overallPct - studentSubjectScore(a.id).overallPct);
+    openModal("All Students — Sorted by Score", modalStudentTableHtml(sorted));
+  });
+
+  byId("statSupport", () => {
+    const list = studentPcts.filter(x => x.pct < 70).map(x => x.s);
+    openModal("Students Needing Support (below 70%)", modalStudentTableHtml(list));
+  });
+
+  byId("statCritical", () => {
+    const rows = topGaps.filter(g => g.avgPct < 40);
+    openModal("Critical Learning Gaps (below 40% class average)", criticalGapsModalHtml(rows));
+  });
+
+  if (strongestSubj) byId("statStrong", () => openModal(`Strongest Subject — ${strongestSubj.subject}`, subjectDetailModalHtml(strongestSubj, students)));
+  if (weakestSubj) byId("statWeak", () => openModal(`Weakest Subject — ${weakestSubj.subject}`, subjectDetailModalHtml(weakestSubj, students)));
+}
+
+// Table of students shown inside a modal — each row has a "View Response" button that drills
+// into that specific student's full, question-by-question answers.
+function modalStudentTableHtml(students) {
+  if (!students.length) return `<div class="empty-state">No students found.</div>`;
+  return `
+    <table class="student-table">
+      <thead><tr><th>Student</th><th>Std</th><th>School</th><th>Area</th><th>Gender</th><th>Age</th><th>Score</th><th>Status</th><th></th></tr></thead>
+      <tbody>${students.map(s => modalStudentRow(s)).join("")}</tbody>
+    </table>`;
+}
+function modalStudentRow(s) {
+  const pct = studentSubjectScore(s.id).overallPct;
+  const st = statusFromPct(pct);
+  return `<tr>
+    <td>${s.name}</td>
+    <td><span class="badge ${stdBadgeClass(s.standard)}">${s.standard}th</span></td>
+    <td>${s.school_name || "—"}</td>
+    <td><span class="badge ${s.area==='Rural'?'badge-rural':'badge-urban'}">${s.area || "—"}</span></td>
+    <td>${s.gender || "—"}</td>
+    <td>${s.age || "—"}</td>
+    <td>${pct}%</td>
+    <td><span class="badge ${st.cls}">${st.label}</span></td>
+    <td><button class="btn" style="background:var(--surface-2);padding:5px 10px;font-size:11px;" data-view-resp="${s.id}">View Response</button></td>
+  </tr>`;
+}
+
+function criticalGapsModalHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No critical gaps right now.</div>`;
+  return `
+    <table class="student-table">
+      <thead><tr><th>Concept</th><th>Subject</th><th>Class</th><th>Students Struggling</th><th>Avg Accuracy</th></tr></thead>
+      <tbody>${rows.map(g => `<tr><td>${g.concept}</td><td>${g.subject || "—"}</td><td>${g.standard}th</td><td>${g.studentsWrong}/${g.studentsTotal}</td><td>${g.avgPct}%</td></tr>`).join("")}</tbody>
+    </table>`;
+}
+
+// Concept breakdown for one subject, plus the specific students who are weak in it.
+function subjectDetailModalHtml(sp, students) {
+  const weakList = sp.weakConcepts.length
+    ? `<table class="student-table"><thead><tr><th>Concept</th><th>Avg Accuracy</th></tr></thead><tbody>${sp.weakConcepts.map(c => `<tr><td>${c.concept}</td><td>${c.pct}%</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty-state">No major weak concepts in this subject.</div>`;
+  const weakStudents = students.filter(s => {
+    const subj = studentSubjectScore(s.id).subjects.find(x => x.subject === sp.subject);
+    return subj && subj.pct < 60;
+  });
+  return `
+    <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;">Class average in <b>${sp.subject}</b>: <b style="color:${pctColor(sp.avgPct)}">${sp.avgPct}%</b> (${sp.status})</p>
+    <div style="font-size:11px;font-weight:600;color:var(--ink-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Concept Breakdown</div>
+    ${weakList}
+    <div style="font-size:11px;font-weight:600;color:var(--ink-muted);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px;">Students Below 60% in ${sp.subject}</div>
+    ${modalStudentTableHtml(weakStudents)}`;
+}
+
+// Full question-by-question response viewer for one student — used by every "View Response" button.
+function openStudentResponseModal(studentId) {
+  const s = adminState.students.find(x => x.id === studentId);
+  if (!s) return;
+  const resp = adminState.responses.filter(r => r.student_id === studentId);
+  const qs = adminState.questions.filter(q => q.standard === s.standard).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+  const subj = computeSubjectScores(resp, adminState.questions);
+  const c = avatarColor(s.id);
+  const header = `
+    <div class="modal-student-header">
+      <div class="stu-avatar" style="background:${c.bg};color:${c.fg};width:44px;height:44px;font-size:15px;">${initials(s.name)}</div>
+      <div>
+        <div style="font-weight:700;font-size:14px;">${s.name}</div>
+        <div style="font-size:11.5px;color:var(--ink-muted);margin-top:2px;">Class ${s.standard}th · ${s.school_name || "—"} · ${s.area || "—"} · ${s.gender || "—"} · Age ${s.age || "—"}</div>
+        <div style="font-size:11.5px;color:var(--ink-muted);margin-top:1px;">Submitted ${s.created_at ? new Date(s.created_at).toLocaleString() : "—"} · Language: ${s.language_used || "en"}</div>
+        <div style="font-size:12.5px;font-weight:700;margin-top:6px;color:${pctColor(subj.overallPct)};">Overall: ${subj.overallPct}% (${subj.totalCorrect}/${subj.totalQ} correct)</div>
+      </div>
+    </div>`;
+  const body = qs.length
+    ? qs.map((q, i) => answerReviewRowAdmin(q, resp.find(r => r.question_id === q.id), i + 1)).join("")
+    : `<div class="empty-state">No questions found for this class.</div>`;
+  openModal(`Complete Response — ${s.name}`, header + body);
+}
+
+function answerReviewRowAdmin(q, r, num) {
+  const qText = q.question_en;
+  if (!r) {
+    return `<div class="answer-review-row"><div class="answer-review-q">Q${num}. ${qText}</div><div class="answer-review-you" style="color:var(--ink-muted);">Not answered</div></div>`;
+  }
+  if (q.type === "mcq" || q.type === "mcq_multi") {
+    let correctText = q.correct_answer || "";
+    if (!correctText && q.correct_answers) {
+      try { correctText = (typeof q.correct_answers === "string" ? JSON.parse(q.correct_answers) : q.correct_answers).join(", "); } catch (e) {}
+    }
+    return `<div class="answer-review-row">
+      <div class="answer-review-meta">${[q.subject, q.concept, q.difficulty].filter(Boolean).join(" · ")}</div>
+      <div class="answer-review-q">Q${num}. ${qText} <span class="badge ${r.is_correct ? "badge-good" : "badge-critical"}" style="margin-left:6px;">${r.is_correct ? "Correct" : "Incorrect"}</span></div>
+      <div class="answer-review-you">Answer: ${r.answer_value || "—"}</div>
+      ${!r.is_correct ? `<div class="answer-review-correct wrong">Correct answer: ${correctText}</div>` : ""}
+    </div>`;
+  } else if (q.type === "likert") {
+    return `<div class="answer-review-row"><div class="answer-review-q">Q${num}. ${qText}</div><div class="answer-review-you">Rating: ${r.answer_value}/5</div></div>`;
+  } else {
+    return `<div class="answer-review-row"><div class="answer-review-q">Q${num}. ${qText}</div><div class="answer-review-you">${r.answer_value || "—"}</div></div>`;
+  }
+}
+
+function insufficientDataCard(n) {
+  return `
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-body" style="text-align:center;padding:2.5rem 1.5rem;">
+        <div style="font-size:32px;margin-bottom:10px;">📊</div>
+        <p style="font-size:14px;color:var(--ink-soft);font-weight:600;max-width:420px;margin:0 auto;">${INSUFFICIENT_DATA_MSG}</p>
+        <p style="font-size:12px;color:var(--ink-muted);margin-top:8px;">${n} of ${MIN_STUDENTS_FOR_INSIGHTS} students assessed so far.</p>
+      </div>
+    </div>`;
+}
+
+// One row per subject: average %, status, and only the genuinely weak concepts (never 0-data ones)
+function computeSubjectPerformance(conceptEntries) {
+  const bySubject = {};
   conceptEntries.forEach(e => {
     if (!e.subject) return;
-    if (!agg[e.subject]) agg[e.subject] = { sum: 0, n: 0 };
-    agg[e.subject].sum += e.score10; agg[e.subject].n += 1;
+    if (!bySubject[e.subject]) bySubject[e.subject] = { sum: 0, n: 0, concepts: {} };
+    bySubject[e.subject].sum += e.score10; bySubject[e.subject].n += 1;
+    if (!bySubject[e.subject].concepts[e.concept]) bySubject[e.subject].concepts[e.concept] = { sum: 0, n: 0 };
+    bySubject[e.subject].concepts[e.concept].sum += e.score10;
+    bySubject[e.subject].concepts[e.concept].n += 1;
   });
-  const rows = subjects.map(s => ({ subject: s, pct: agg[s] && agg[s].n ? Math.round((agg[s].sum / agg[s].n) * 10) : null }));
-  if (rows.every(r => r.pct === null)) return `<div class="empty-state">No responses yet.</div>`;
-  return rows.map(r => r.pct === null ? "" : `
-    <div class="topic-row">
-      <span class="topic-label">${r.subject}</span>
-      <div class="topic-bar-wrap"><div class="topic-bar-fill" style="width:${r.pct}%;background:${pctColor(r.pct)}"></div></div>
-      <span class="topic-pct" style="color:${pctColor(r.pct)}">${r.pct}%</span>
-    </div>`).join("");
+  return ["Science", "Maths", "English", "Computer"].filter(s => bySubject[s]).map(subject => {
+    const s = bySubject[subject];
+    const avgPct = Math.round((s.sum / s.n) * 10);
+    const weakConcepts = Object.keys(s.concepts)
+      .map(c => ({ concept: c, pct: Math.round((s.concepts[c].sum / s.concepts[c].n) * 10) }))
+      .filter(c => c.pct < 70)
+      .sort((a, b) => a.pct - b.pct)
+      .slice(0, 3);
+    const status = avgPct >= 70 ? "Good" : avgPct >= 40 ? "Moderate" : "Critical";
+    return { subject, avgPct, weakConcepts, status };
+  });
 }
 
-// Genuine unsupervised ML (k-means clustering, see js/clustering.js) — groups students into
-// learning-profile clusters based on their 4-subject score vector. Clearly labeled as clustering,
-// not a trained/predictive model — see README for an honest breakdown of what's ML here vs. the
-// rule-based weighted scoring used elsewhere.
-function clusteringPanelHtml(students) {
-  if (students.length < 3) {
-    return `
-      <div class="card" style="margin-bottom:1.5rem;">
-        <div class="card-header"><span class="card-header-icon">🤖</span><h3>AI Student Clustering (k-means)</h3></div>
-        <div class="card-body"><div class="empty-state">Need at least 3 students in the current filter to run clustering.</div></div>
-      </div>`;
-  }
+// Groups students by a demographic field ("gender" or "area") and computes overall + per-subject
+// average % for each group — used for the Gender-wise / Rural vs Urban performance cards.
+function groupPerfRows(students, groupField) {
+  const values = groupField === "gender" ? ["Male", "Female"] : ["Rural", "Urban"];
+  return values
+    .map(v => students.filter(s => s[groupField] === v))
+    .filter(group => group.length)
+    .map(group => {
+      const key = group[0][groupField];
+      const pcts = group.map(s => studentSubjectScore(s.id).overallPct);
+      const avg = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : 0;
+      const entries = allConceptEntries(group);
+      const bySubj = {};
+      computeSubjectPerformance(entries).forEach(sp => { bySubj[sp.subject] = sp.avgPct; });
+      return { key, count: group.length, avg, bySubj };
+    });
+}
+
+function demographicTableHtml(rows) {
+  const subjects = ["Science", "Maths", "English", "Computer"];
+  if (!rows.length) return `<div class="empty-state">Not enough data for this breakdown yet.</div>`;
+  return `
+    <table class="student-table">
+      <thead><tr><th>Group</th><th>Students</th><th>Avg Score</th>${subjects.map(s => `<th>${s}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr>
+          <td>${r.key}</td>
+          <td>${r.count}</td>
+          <td><span style="font-weight:700;color:${pctColor(r.avg)}">${r.avg}%</span></td>
+          ${subjects.map(s => `<td>${r.bySubj[s] !== undefined ? r.bySubj[s] + "%" : "—"}</td>`).join("")}
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+
+function subjectPerfCard(sp) {
+  const color = sp.status === "Good" ? "#2E9E5B" : sp.status === "Moderate" ? "#E08A1A" : "#D63B3B";
+  const badgeCls = sp.status === "Good" ? "badge-good" : sp.status === "Moderate" ? "badge-needs" : "badge-critical";
+  return `
+    <div style="border:1px solid var(--border);border-radius:var(--radius);padding:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-weight:600;font-size:14px;">${sp.subject}</span>
+        <span class="badge ${badgeCls}">${sp.status}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-muted);margin-bottom:4px;">
+        <span>Average</span><span style="font-weight:600;color:${color}">${sp.avgPct}%</span>
+      </div>
+      <div class="topic-bar-wrap" style="margin-bottom:12px;"><div class="topic-bar-fill" style="width:${sp.avgPct}%;background:${color};"></div></div>
+      ${sp.weakConcepts.length ? `
+        <div style="font-size:11px;color:var(--ink-muted);font-weight:600;margin-bottom:4px;">TOP WEAK CONCEPTS</div>
+        ${sp.weakConcepts.map(c => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${c.concept}</span><span style="color:var(--ink-muted)">${c.pct}%</span></div>`).join("")}
+      ` : `<div style="font-size:12px;color:var(--green);">No major weak concepts</div>`}
+    </div>`;
+}
+
+function topGapRow(g) {
+  const sev = g.avgPct < 40 ? { label: "High", cls: "badge-critical" } : g.avgPct < 60 ? { label: "Medium", cls: "badge-needs" } : { label: "Low", cls: "badge-good" };
+  return `<tr>
+    <td>${g.concept}</td><td>${g.subject || "—"}</td><td>${g.standard}th</td>
+    <td>${g.studentsWrong}/${g.studentsTotal}</td><td>${g.avgPct}%</td>
+    <td><span class="badge ${sev.cls}">${sev.label}</span></td>
+  </tr>`;
+}
+
+// Natural-language description of each AI-clustered group (not raw cluster centroids)
+function aiAnalysisHtml(students) {
+  if (students.length < 3) return `<div class="empty-state">Need at least 3 students to detect learning-profile groups.</div>`;
   const withScores = students.map(s => {
     const subj = studentSubjectScore(s.id);
     const subjectPct = {}; subj.subjects.forEach(x => subjectPct[x.subject] = x.pct);
     return { id: s.id, name: s.name, standard: s.standard, subjectPct };
   });
   const result = clusterStudents(withScores, 3);
-  if (!result) return "";
+  if (!result) return `<div class="empty-state">Not enough data yet.</div>`;
 
-  return `
-    <div class="card" style="margin-bottom:1.5rem;">
-      <div class="card-header"><span class="card-header-icon">🤖</span><h3>AI Student Clustering (k-means, unsupervised ML)</h3></div>
-      <div class="card-body">
-        <p style="font-size:12px;color:var(--ink-muted);margin-bottom:14px;">
-          Groups students by their Science/Maths/English/Computer score pattern — no labels given, the
-          algorithm finds the groupings itself. This is genuine machine learning (unsupervised clustering),
-          distinct from the rule-based scoring used for individual gap detection.
-        </p>
-        ${result.clusters.map(c => `
-          <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <span style="font-weight:600;font-size:13px;color:${c.color}">${c.label}</span>
-              <span class="tag">${c.members.length} student${c.members.length===1?"":"s"}</span>
-            </div>
-            <div style="font-size:11.5px;color:var(--ink-muted);margin-bottom:8px;">
-              Cluster average — ${result.subjects.map((subj, i) => `${subj}: ${Math.round(c.centroid[i])}%`).join(" · ")}
-            </div>
-            <div style="font-size:12px;color:var(--ink-soft);">${c.members.map(m => `${m.name} (Std ${m.standard})`).join(", ")}</div>
-          </div>`).join("")}
-      </div>
-    </div>`;
+  return result.clusters.map((c, i) => {
+    const vals = result.subjects.map((subj, idx) => ({ subject: subj, val: c.centroid[idx] }));
+    const strong = vals.reduce((a, b) => a.val > b.val ? a : b);
+    const weak = vals.reduce((a, b) => a.val < b.val ? a : b);
+    const rec = weak.subject === "Science" ? "Conduct science concept revision sessions."
+      : weak.subject === "Maths" ? "Assign extra Maths practice worksheets."
+      : weak.subject === "English" ? "Focus on grammar/vocabulary practice."
+      : "Schedule hands-on programming/computer practice.";
+    return `
+      <div style="border-left:3px solid var(--blue);padding:10px 16px;margin-bottom:14px;background:var(--surface-2);border-radius:0 8px 8px 0;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px;">Group ${i+1} <span class="tag">${c.members.length} student${c.members.length===1?"":"s"}</span></div>
+        <div style="font-size:12.5px;color:var(--ink-soft);">Strong in <b>${strong.subject}</b> (${Math.round(strong.val)}%) · Weak in <b>${weak.subject}</b> (${Math.round(weak.val)}%)</div>
+        <div style="font-size:12.5px;color:var(--blue-dark);margin-top:4px;">Recommendation: ${rec}</div>
+      </div>`;
+  }).join("");
 }
+
+function teacherRecommendationsHtml(subjectPerf, topGaps, studentPcts) {
+  const recs = [];
+  const criticalSubjects = subjectPerf.filter(s => s.status === "Critical");
+  criticalSubjects.forEach(s => recs.push(`Conduct a remedial session for <b>${s.subject}</b> — class average is only ${s.avgPct}%.`));
+  if (topGaps.length) {
+    const names = topGaps.slice(0, 3).map(g => g.concept).join(", ");
+    recs.push(`Revise these specific weak concepts across the class: <b>${names}</b>.`);
+    recs.push(`Assign targeted practice worksheets for concepts scoring below 70% class average.`);
+  }
+  const spread = studentPcts.length ? Math.max(...studentPcts.map(x=>x.pct)) - Math.min(...studentPcts.map(x=>x.pct)) : 0;
+  if (spread > 40) recs.push(`Scores vary widely across students — consider pairing stronger and weaker learners for peer learning.`);
+  const scienceOrComputer = subjectPerf.find(s => (s.subject === "Science" || s.subject === "Computer") && s.status !== "Good");
+  if (scienceOrComputer) recs.push(`Encourage activity-based / hands-on learning for ${scienceOrComputer.subject}.`);
+  if (!recs.length) recs.push(`Class is performing well overall — continue current teaching approach and monitor future assessments.`);
+  return `<ul style="margin:0;padding-left:20px;font-size:13px;line-height:2;color:var(--ink-soft);">${recs.map(r => `<li>${r}</li>`).join("")}</ul>`;
+}
+
+function statusFromPct(pct) {
+  return pct >= 70 ? { label: "Good", cls: "badge-good" } : pct >= 40 ? { label: "Needs Support", cls: "badge-needs" } : { label: "Critical", cls: "badge-critical" };
+}
+
+function weakestSubjectFor(studentId) {
+  const subj = studentSubjectScore(studentId).subjects;
+  if (!subj.length) return "—";
+  return subj.reduce((a, b) => a.pct < b.pct ? a : b).subject;
+}
+
+function simpleStudentRow(s) {
+  const pct = studentSubjectScore(s.id).overallPct;
+  const st = statusFromPct(pct);
+  const c = avatarColor(s.id);
+  return `<tr>
+    <td><div class="stu-name-cell"><div class="stu-avatar" style="background:${c.bg};color:${c.fg}">${initials(s.name)}</div><div class="stu-name">${s.name}</div></div></td>
+    <td><span class="badge ${stdBadgeClass(s.standard)}">${s.standard}th</span></td>
+    <td>${pct}%</td>
+    <td>${weakestSubjectFor(s.id)}</td>
+    <td><span class="badge ${st.cls}">${st.label}</span></td>
+  </tr>`;
+}
+
+function recentAssessmentRow(s) {
+  const pct = studentSubjectScore(s.id).overallPct;
+  return `<tr>
+    <td>${s.name}</td><td>${s.standard}th</td><td>${pct}%</td><td>${weakestSubjectFor(s.id)}</td>
+  </tr>`;
+}
+
 
 function studentRowHtml(s) {
   const sc = studentSubjectScore(s.id);
@@ -512,11 +786,12 @@ function studentRowHtml(s) {
   return `<tr>
     <td><div class="stu-name-cell">
       <div class="stu-avatar" style="background:${c.bg};color:${c.fg}">${initials(s.name)}</div>
-      <div><div class="stu-name">${s.name}</div><div class="stu-roll">ID ${s.id.slice(0,8).toUpperCase()} · Age ${s.age || "—"} · <span class="badge ${s.area==='Rural'?'badge-rural':'badge-urban'}" style="padding:1px 6px;">${s.area||"—"}</span></div></div>
+      <div><div class="stu-name">${s.name}</div><div class="stu-roll">ID ${s.id.slice(0,8).toUpperCase()} · Age ${s.age || "—"} · ${s.gender || "—"} · <span class="badge ${s.area==='Rural'?'badge-rural':'badge-urban'}" style="padding:1px 6px;">${s.area||"—"}</span></div></div>
     </div></td>
     <td><span class="badge ${stdBadgeClass(s.standard)}">${s.standard}th</span></td>
     <td><div class="score-pill"><span>${pct}%</span><span class="mini-bar"><span class="mini-bar-fill" style="width:${pct}%;background:${pctColor(pct)}"></span></span></div></td>
     <td><span class="badge ${badge.cls}">${badge.label}</span></td>
+    <td><button class="btn" style="background:var(--surface-2);padding:5px 10px;font-size:11px;" data-view-resp="${s.id}">View Response</button></td>
   </tr>`;
 }
 
@@ -529,12 +804,13 @@ function renderStudents() {
       <div class="card-header"><span class="card-header-icon">👩‍🎓</span><h3>All students</h3><span style="font-size:11px;color:var(--ink-muted)">${list.length} shown</span></div>
       <div style="padding:0 0.75rem;">
         <table class="student-table">
-          <thead><tr><th>Student</th><th>Std</th><th>Score</th><th>Status</th></tr></thead>
-          <tbody>${list.length ? list.map(s => studentRowHtml(s)).join("") : `<tr><td colspan="4" class="empty-state">No matching students.</td></tr>`}</tbody>
+          <thead><tr><th>Student</th><th>Std</th><th>Score</th><th>Status</th><th></th></tr></thead>
+          <tbody>${list.length ? list.map(s => studentRowHtml(s)).join("") : `<tr><td colspan="5" class="empty-state">No matching students.</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
   wireFilterBar();
+  document.querySelectorAll("[data-view-resp]").forEach(b => { b.onclick = () => openStudentResponseModal(b.dataset.viewResp); });
 }
 
 // ================= QUESTION BANK TAB =================

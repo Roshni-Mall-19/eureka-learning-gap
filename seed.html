@@ -14,9 +14,13 @@
       <p style="color:#475467;font-size:.92rem;line-height:1.6;">
         Run this <b>once</b> after you've run <code>schema.sql</code> in Supabase and pasted your
         project URL/key into <code>js/supabase-client.js</code>. It will insert the full Class 8, 9
-        and 10 Science question bank (~40 questions each) into your <code>questions</code> table.
-        Safe to run again — it checks for existing questions per standard first.
+        and 10 question bank (Science/Maths/English/Computer, 42 questions each) into your
+        <code>questions</code> table. Safe to run again — it checks for existing questions per standard first.
       </p>
+      <div id="authGate" style="display:none;background:#FFF3E2;border:1px solid #F5D9A8;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.85rem;color:#8A5A0F;">
+        🔒 You need to be logged in to seed questions (this now requires admin auth, same as the dashboard).
+        Open <a href="admin.html" target="_blank">admin.html</a>, log in there, then reload this page in the same browser tab.
+      </div>
       <button class="btn btn-primary" id="seedBtn">Seed Questions Now</button>
       <div id="log" style="margin-top:16px;font-family:'IBM Plex Mono',monospace;font-size:.8rem;white-space:pre-wrap;color:#344054;"></div>
     </div>

@@ -1,21 +1,22 @@
 const pageBody = document.getElementById("pageBody");
 const topbarTitle = document.getElementById("topbarTitle");
 
-// ================= Basic login gate =================
-// NOTE: This is a simple hardcoded check for keeping casual visitors out of the
-// dashboard — it is NOT real security (anyone reading this file can see the
-// password). Do not use this to protect sensitive student data long-term.
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin#4";
-
-function checkLogin() {
-  const user = document.getElementById("loginUser").value.trim();
+// ================= Real login (Supabase Auth) =================
+// Access to student data and question-bank editing is enforced at the DATABASE level via Row Level
+// Security (see schema.sql) — only a signed-in Supabase Auth user can read students/responses or
+// manage questions. This login form just calls Supabase's real auth, so the protection is genuine,
+// not just a JS gate a visitor could bypass by reading this file.
+async function checkLogin() {
+  const email = document.getElementById("loginUser").value.trim();
   const pass = document.getElementById("loginPass").value;
-  if (user === ADMIN_USER && pass === ADMIN_PASS) {
-    sessionStorage.setItem("vidyagap_admin_ok", "1");
-    showDashboard();
-  } else {
+  document.getElementById("loginBtn").disabled = true;
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
+  document.getElementById("loginBtn").disabled = false;
+  if (error) {
+    document.getElementById("loginErr").textContent = error.message;
     document.getElementById("loginErr").style.display = "block";
+  } else {
+    showDashboard();
   }
 }
 
@@ -28,9 +29,9 @@ function showDashboard() {
 document.getElementById("loginBtn").onclick = checkLogin;
 document.getElementById("loginPass").addEventListener("keydown", (e) => { if (e.key === "Enter") checkLogin(); });
 
-if (sessionStorage.getItem("vidyagap_admin_ok") === "1") {
-  showDashboard();
-}
+supabaseClient.auth.getSession().then(({ data: { session } }) => {
+  if (session) showDashboard();
+});
 
 const AVATAR_COLORS = [
   { bg: "#EEF2FF", fg: "#3B6BF5" }, { bg: "#EEE9FF", fg: "#6C4FD4" },
@@ -44,6 +45,7 @@ const adminState = {
   qbankStandard: "8",
   search: "",
   filterStandard: "",
+  filterSchool: "",
   editingId: null
 };
 
@@ -63,51 +65,108 @@ document.getElementById("searchBox").addEventListener("input", (e) => {
   adminState.search = e.target.value.toLowerCase();
   render();
 });
-document.getElementById("stdFilter").addEventListener("change", (e) => {
-  adminState.filterStandard = e.target.value;
-  render();
-});
-document.getElementById("logoutBtn").addEventListener("click", () => {
-  sessionStorage.removeItem("vidyagap_admin_ok");
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await supabaseClient.auth.signOut();
   location.reload();
 });
-document.getElementById("exportBtn").addEventListener("click", exportCSV);
+document.getElementById("exportBtn").addEventListener("click", exportExcel);
 
-// Students currently in scope, after applying the class filter + search box
+// Filter bar (Class + School) — rendered inside the page body on Overview/Students tabs, rather than
+// cramming more controls into the topbar.
+function filterBarHtml() {
+  const schools = [...new Set(adminState.students.map(s => s.school_name).filter(Boolean))].sort();
+  return `
+    <div class="filters" style="margin-bottom:1rem;">
+      <select id="filterStdSel">
+        <option value="">All Classes</option>
+        <option value="8" ${adminState.filterStandard==="8"?"selected":""}>Class 8</option>
+        <option value="9" ${adminState.filterStandard==="9"?"selected":""}>Class 9</option>
+        <option value="10" ${adminState.filterStandard==="10"?"selected":""}>Class 10</option>
+      </select>
+      <select id="filterSchoolSel">
+        <option value="">All Schools</option>
+        ${schools.map(sch => `<option value="${sch.replace(/"/g,'&quot;')}" ${adminState.filterSchool===sch?"selected":""}>${sch}</option>`).join("")}
+      </select>
+      ${(adminState.filterStandard || adminState.filterSchool) ? `<button class="btn btn-secondary" id="clearFiltersBtn">Clear filters</button>` : ""}
+    </div>`;
+}
+function wireFilterBar() {
+  const stdSel = document.getElementById("filterStdSel");
+  const schoolSel = document.getElementById("filterSchoolSel");
+  if (stdSel) stdSel.onchange = (e) => { adminState.filterStandard = e.target.value; render(); };
+  if (schoolSel) schoolSel.onchange = (e) => { adminState.filterSchool = e.target.value; render(); };
+  const clearBtn = document.getElementById("clearFiltersBtn");
+  if (clearBtn) clearBtn.onclick = () => { adminState.filterStandard = ""; adminState.filterSchool = ""; render(); };
+}
+
+// Students currently in scope, after applying class filter + school filter + search box
 function visibleStudents() {
   return adminState.students.filter(s =>
     (!adminState.filterStandard || s.standard === adminState.filterStandard) &&
+    (!adminState.filterSchool || s.school_name === adminState.filterSchool) &&
     (!adminState.search || s.name.toLowerCase().includes(adminState.search) || (s.school_name || "").toLowerCase().includes(adminState.search))
   );
 }
 
-function exportCSV() {
-  const students = visibleStudents();
-  const header = ["Name", "Age", "Gender", "Standard", "School", "Area", "Language", "Submitted At",
-    "Overall Score (%)", "Science %", "Maths %", "English %", "Computer %", "Weak Concepts"];
-  const rows = students.map(s => {
+// Full data export — always exports the ENTIRE dataset (not just the currently filtered/searched
+// view) since this is meant to be the complete research dataset for analysis outside the app.
+function buildSummaryRows(students) {
+  return students.map(s => {
     const resp = adminState.responses.filter(r => r.student_id === s.id);
     const subj = computeSubjectScores(resp, adminState.questions);
-    const bySubj = {}; subj.subjects.forEach(x => bySubj[x.subject] = x.score10 * 10);
-    const weak = subj.subjects.filter(x => x.score10 < 6).flatMap(x => x.weakConcepts);
-    return [
-      s.name, s.age || "", s.gender || "", s.standard, s.school_name || "", s.area || "", s.language_used || "",
-      new Date(s.created_at).toLocaleString(),
-      Math.round(subj.overallScore10 * 10),
-      bySubj["Science"] ?? "", bySubj["Maths"] ?? "", bySubj["English"] ?? "", bySubj["Computer"] ?? "",
-      [...new Set(weak)].join("; ")
-    ];
+    const bySubj = {}; subj.subjects.forEach(x => bySubj[x.subject] = x.pct);
+    const weak = subj.subjects.filter(x => x.pct < 60).flatMap(x => x.weakConcepts);
+    return {
+      "Student Name": s.name, "Age": s.age || "", "Gender": s.gender || "", "Class": s.standard,
+      "School": s.school_name || "", "Area": s.area || "", "Language Used": s.language_used || "",
+      "Submitted At": new Date(s.created_at).toLocaleString(),
+      "Overall %": subj.overallPct, "Science %": bySubj["Science"] ?? "", "Maths %": bySubj["Maths"] ?? "",
+      "English %": bySubj["English"] ?? "", "Computer %": bySubj["Computer"] ?? "",
+      "Weak Concepts": [...new Set(weak)].join("; ")
+    };
   });
-  const csv = [header, ...rows].map(row =>
-    row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")
-  ).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `learning-gap-data-${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+}
+
+function buildResponseRows(students, questions, responses, standardFilter) {
+  const qMap = {}; questions.forEach(q => qMap[q.id] = q);
+  const sMap = {}; students.forEach(s => sMap[s.id] = s);
+  return responses
+    .filter(r => sMap[r.student_id] && (!standardFilter || sMap[r.student_id].standard === standardFilter))
+    .map(r => {
+      const q = qMap[r.question_id] || {};
+      const s = sMap[r.student_id] || {};
+      let correctAns = q.correct_answer || "";
+      if (!correctAns && q.correct_answers) {
+        try { correctAns = (typeof q.correct_answers === "string" ? JSON.parse(q.correct_answers) : q.correct_answers).join(", "); } catch (e) {}
+      }
+      return {
+        "Student Name": s.name || "", "Class": s.standard || "", "School": s.school_name || "", "Area": s.area || "",
+        "Gender": s.gender || "", "Age": s.age || "",
+        "Question Type": q.type || "", "Subject": q.subject || "", "Concept": q.concept || "",
+        "Chapter": q.chapter || "", "Difficulty": q.difficulty || "",
+        "Question (English)": q.question_en || "", "Student's Answer": r.answer_value || "",
+        "Correct Answer": correctAns, "Is Correct": r.is_correct === null ? "" : (r.is_correct ? "Yes" : "No"),
+        "Submitted At": s.created_at ? new Date(s.created_at).toLocaleString() : ""
+      };
+    });
+}
+
+function exportExcel() {
+  if (typeof XLSX === "undefined") { alert("Excel export library failed to load — check your internet connection and try again."); return; }
+  const allStudents = adminState.students;
+  const wb = XLSX.utils.book_new();
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildSummaryRows(allStudents)), "Summary (All Students)");
+
+  ["8", "9", "10"].forEach(std => {
+    const rows = buildResponseRows(allStudents, adminState.questions, adminState.responses, std);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No responses yet for this class" }]), `Std ${std} Responses`);
+  });
+
+  const allRows = buildResponseRows(allStudents, adminState.questions, adminState.responses, "");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allRows.length ? allRows : [{ Note: "No responses yet" }]), "All Responses");
+
+  XLSX.writeFile(wb, `learning-gap-full-data-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 async function loadAll() {
@@ -178,6 +237,26 @@ function allConceptEntries(students) {
   return rows;
 }
 
+// Aggregates per-student concept entries into ONE row per (concept + class), averaged across every
+// student who attempted it. This is the number that should drive "gap severity" and "recent gaps" —
+// a single student's single wrong answer is not, by itself, a "40% accuracy" or "0% accuracy" class
+// statistic; it only becomes a meaningful percentage once averaged across everyone who took that question.
+function aggregateConceptStats(conceptEntries) {
+  const agg = {};
+  conceptEntries.forEach(e => {
+    const key = e.standard + "||" + e.concept;
+    if (!agg[key]) agg[key] = { concept: e.concept, standard: e.standard, subject: e.subject, sum: 0, n: 0, wrongCount: 0 };
+    agg[key].sum += e.score10;
+    agg[key].n += 1;
+    if (e.score10 < 5) agg[key].wrongCount += 1;
+  });
+  return Object.values(agg).map(a => ({
+    concept: a.concept, standard: a.standard, subject: a.subject,
+    avgPct: Math.round((a.sum / a.n) * 10),
+    studentsTotal: a.n, studentsWrong: a.wrongCount
+  }));
+}
+
 function render() {
   if (adminState.tab === "overview") renderOverview();
   else if (adminState.tab === "students") renderStudents();
@@ -188,20 +267,20 @@ function render() {
 function renderOverview() {
   const students = visibleStudents();
   const conceptEntries = allConceptEntries(students);
-  const gapEntries = conceptEntries.filter(c => c.score10 < 7); // anything below 70% counts as a "gap"
-  const scores = students.map(s => studentSubjectScore(s.id).overallScore10);
-  const avgPct = scores.length ? Math.round((scores.reduce((a, c) => a + c, 0) / scores.length) * 10) : 0;
+  const conceptStats = aggregateConceptStats(conceptEntries); // ONE row per concept, averaged across students
+  const gapConcepts = conceptStats.filter(c => c.avgPct < 70); // anything below 70% class-average counts as a "gap"
+  const scores = students.map(s => studentSubjectScore(s.id).overallPct);
+  const avgPct = scores.length ? Math.round(scores.reduce((a, c) => a + c, 0) / scores.length) : 0;
 
-  document.getElementById("navGapCount").textContent = gapEntries.length;
+  document.getElementById("navGapCount").textContent = gapConcepts.length;
 
-  // Topic performance grouped by standard
+  // Topic performance grouped by standard (already a proper per-concept average — this panel was correct before)
   function topicGroup(std) {
     const entries = conceptEntries.filter(c => c.standard === std);
     const agg = {};
     entries.forEach(e => { if (!agg[e.concept]) agg[e.concept] = { sum: 0, n: 0 }; agg[e.concept].sum += e.score10; agg[e.concept].n += 1; });
     return Object.keys(agg).map(k => ({ concept: k, pct: Math.round((agg[k].sum / agg[k].n) * 10) })).sort((a, b) => a.pct - b.pct).slice(0, 6);
   }
-
   function topicRowsHtml(std) {
     const rows = topicGroup(std);
     if (!rows.length) return `<p style="font-size:12px;color:var(--ink-muted);margin-bottom:8px;">No responses yet for this class.</p>`;
@@ -213,23 +292,29 @@ function renderOverview() {
       </div>`).join("");
   }
 
-  // Gap severity donut
-  const critical = gapEntries.filter(c => c.score10 < 4).length;
-  const needsWork = gapEntries.filter(c => c.score10 >= 4 && c.score10 < 6).length;
-  const borderline = gapEntries.filter(c => c.score10 >= 6 && c.score10 < 7).length;
-  const totalGaps = gapEntries.length || 1;
+  // Gap severity donut — now built from the AGGREGATED per-concept average, not raw per-student instances,
+  // so "Needs work" / "Borderline" can actually populate (a concept only lands in "Critical" if the class
+  // AVERAGE on it is genuinely below 40%, not just because one student got one question wrong).
+  const critical = gapConcepts.filter(c => c.avgPct < 40).length;
+  const needsWork = gapConcepts.filter(c => c.avgPct >= 40 && c.avgPct < 60).length;
+  const borderline = gapConcepts.filter(c => c.avgPct >= 60 && c.avgPct < 70).length;
+  const totalGaps = gapConcepts.length || 1;
   const circumference = 345.4;
   const critLen = (critical / totalGaps) * circumference;
   const needsLen = (needsWork / totalGaps) * circumference;
   const borderLen = (borderline / totalGaps) * circumference;
 
-  // Recent gaps detected — weakest concept-student pairs
-  const recentGaps = [...gapEntries].sort((a, b) => a.score10 - b.score10).slice(0, 7);
-
-  // Recent submissions
+  const recentGaps = [...gapConcepts].sort((a, b) => a.avgPct - b.avgPct).slice(0, 7);
   const recentStudents = [...students].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
 
+  const smallSampleWarning = students.length > 0 && students.length < 5 ? `
+    <div style="background:var(--amber-soft);border:1px solid #F5D9A8;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12.5px;color:#8A5A0F;">
+      ⚠️ Only <b>${students.length}</b> student${students.length===1?"":"s"} assessed so far — percentages below are indicative only, not yet statistically reliable. They'll firm up as more students are tested.
+    </div>` : "";
+
   pageBody.innerHTML = `
+    ${filterBarHtml()}
+    ${smallSampleWarning}
     <div class="stats-grid">
       <div class="stat-card blue">
         <div class="stat-top"><div class="stat-icon blue">👨‍🎓</div></div>
@@ -243,8 +328,8 @@ function renderOverview() {
       </div>
       <div class="stat-card amber">
         <div class="stat-top"><div class="stat-icon amber">⚠️</div></div>
-        <div class="stat-num">${gapEntries.length}</div>
-        <div class="stat-label">Learning gaps detected</div>
+        <div class="stat-num">${gapConcepts.length}</div>
+        <div class="stat-label">Distinct concepts below 70% class avg</div>
       </div>
       <div class="stat-card red">
         <div class="stat-top"><div class="stat-icon red">🎯</div></div>
@@ -278,13 +363,13 @@ function renderOverview() {
                 stroke-dasharray="${needsLen} ${circumference-needsLen}" stroke-dashoffset="${-critLen}" transform="rotate(-90 75 75)"/>
               <circle cx="75" cy="75" r="55" fill="none" stroke="#2E9E5B" stroke-width="22"
                 stroke-dasharray="${borderLen} ${circumference-borderLen}" stroke-dashoffset="${-(critLen+needsLen)}" transform="rotate(-90 75 75)"/>
-              <text x="75" y="70" text-anchor="middle" font-size="22" font-weight="700" fill="#1A1A2E" font-family="'Space Grotesk',sans-serif">${gapEntries.length}</text>
-              <text x="75" y="87" text-anchor="middle" font-size="11" fill="#7B7B9D" font-family="'Inter',sans-serif">total gaps</text>
+              <text x="75" y="70" text-anchor="middle" font-size="22" font-weight="700" fill="#1A1A2E" font-family="'Space Grotesk',sans-serif">${gapConcepts.length}</text>
+              <text x="75" y="87" text-anchor="middle" font-size="11" fill="#7B7B9D" font-family="'Inter',sans-serif">concepts w/ gaps</text>
             </svg>
             <div class="donut-legend">
-              <div class="legend-item"><div class="legend-dot" style="background:#D63B3B"></div><span class="legend-label">Critical (&lt;40%)</span><span class="legend-val">${critical} gaps</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#E08A1A"></div><span class="legend-label">Needs work (40–60%)</span><span class="legend-val">${needsWork} gaps</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#2E9E5B"></div><span class="legend-label">Borderline (60–70%)</span><span class="legend-val">${borderline} gaps</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#D63B3B"></div><span class="legend-label">Critical (&lt;40% class avg)</span><span class="legend-val">${critical}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#E08A1A"></div><span class="legend-label">Needs work (40–60%)</span><span class="legend-val">${needsWork}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#2E9E5B"></div><span class="legend-label">Borderline (60–70%)</span><span class="legend-val">${borderline}</span></div>
             </div>
           </div>
         </div>
@@ -293,12 +378,12 @@ function renderOverview() {
           <div class="card-header"><span class="card-header-icon">🕒</span><h3>Recent submissions</h3></div>
           <div class="card-body" style="padding-top:0.5rem">
             ${recentStudents.length ? recentStudents.map(s => {
-              const pct = Math.round(studentSubjectScore(s.id).overallScore10 * 10);
+              const pct = studentSubjectScore(s.id).overallPct;
               const c = avatarColor(s.id);
               return `<div class="session-item">
                 <div class="session-date" style="background:${c.bg};color:${c.fg}">${initials(s.name)}</div>
                 <div><div class="session-title">${s.name} · Std ${s.standard}</div><div class="session-sub">${s.school_name || "—"} · ${timeAgo(s.created_at)}</div></div>
-                <span class="session-chip" style="background:${statusBadge(pct).cls==='badge-critical'?'var(--red-soft)':'var(--green-soft)'};color:${pctColor(pct)}">${pct}%</span>
+                <span class="session-chip" style="background:${pct<40?'var(--red-soft)':'var(--green-soft)'};color:${pctColor(pct)}">${pct}%</span>
               </div>`;
             }).join("") : `<div class="empty-state">No submissions yet.</div>`}
           </div>
@@ -310,6 +395,8 @@ function renderOverview() {
       <div class="card-header"><span class="card-header-icon">📚</span><h3>Subject-wise performance — all classes</h3></div>
       <div class="card-body">${subjectRowsHtml(conceptEntries)}</div>
     </div>
+
+    ${clusteringPanelHtml(students)}
 
     <div class="bottom-grid">
       <div class="card">
@@ -333,12 +420,12 @@ function renderOverview() {
         <div class="card-header"><span class="card-header-icon">🔍</span><h3>Recent gaps detected</h3></div>
         <div class="card-body" style="padding-top:0.25rem">
           ${recentGaps.length ? recentGaps.map(g => {
-            const sev = g.score10 < 4 ? { label: "Critical", bg: "var(--red-soft)", fg: "var(--red)" } :
-                        g.score10 < 6 ? { label: "Needs work", bg: "var(--amber-soft)", fg: "var(--amber)" } :
+            const sev = g.avgPct < 40 ? { label: "Critical", bg: "var(--red-soft)", fg: "var(--red)" } :
+                        g.avgPct < 60 ? { label: "Needs work", bg: "var(--amber-soft)", fg: "var(--amber)" } :
                                         { label: "Borderline", bg: "var(--green-soft)", fg: "var(--green)" };
             return `<div class="gap-item">
               <div class="gap-type-dot" style="background:${sev.fg}"></div>
-              <div class="gap-content"><div class="gap-title">${g.concept}</div><div class="gap-meta">${g.name} · Class ${g.standard} · ${Math.round(g.score10*10)}% accuracy</div></div>
+              <div class="gap-content"><div class="gap-title">${g.concept}</div><div class="gap-meta">Class ${g.standard} · ${g.subject||""} · ${g.avgPct}% class accuracy (${g.studentsWrong}/${g.studentsTotal} students struggling)</div></div>
               <span class="gap-severity" style="background:${sev.bg};color:${sev.fg}">${sev.label}</span>
             </div>`;
           }).join("") : `<div class="empty-state">No gaps detected yet.</div>`}
@@ -346,6 +433,7 @@ function renderOverview() {
       </div>
     </div>`;
 
+  wireFilterBar();
   const viewAllBtn = document.getElementById("viewAllBtn");
   if (viewAllBtn) viewAllBtn.onclick = () => {
     document.querySelectorAll(".nav-item").forEach(x => x.classList.remove("active"));
@@ -372,9 +460,53 @@ function subjectRowsHtml(conceptEntries) {
     </div>`).join("");
 }
 
+// Genuine unsupervised ML (k-means clustering, see js/clustering.js) — groups students into
+// learning-profile clusters based on their 4-subject score vector. Clearly labeled as clustering,
+// not a trained/predictive model — see README for an honest breakdown of what's ML here vs. the
+// rule-based weighted scoring used elsewhere.
+function clusteringPanelHtml(students) {
+  if (students.length < 3) {
+    return `
+      <div class="card" style="margin-bottom:1.5rem;">
+        <div class="card-header"><span class="card-header-icon">🤖</span><h3>AI Student Clustering (k-means)</h3></div>
+        <div class="card-body"><div class="empty-state">Need at least 3 students in the current filter to run clustering.</div></div>
+      </div>`;
+  }
+  const withScores = students.map(s => {
+    const subj = studentSubjectScore(s.id);
+    const subjectPct = {}; subj.subjects.forEach(x => subjectPct[x.subject] = x.pct);
+    return { id: s.id, name: s.name, standard: s.standard, subjectPct };
+  });
+  const result = clusterStudents(withScores, 3);
+  if (!result) return "";
+
+  return `
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="card-header"><span class="card-header-icon">🤖</span><h3>AI Student Clustering (k-means, unsupervised ML)</h3></div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--ink-muted);margin-bottom:14px;">
+          Groups students by their Science/Maths/English/Computer score pattern — no labels given, the
+          algorithm finds the groupings itself. This is genuine machine learning (unsupervised clustering),
+          distinct from the rule-based scoring used for individual gap detection.
+        </p>
+        ${result.clusters.map(c => `
+          <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <span style="font-weight:600;font-size:13px;color:${c.color}">${c.label}</span>
+              <span class="tag">${c.members.length} student${c.members.length===1?"":"s"}</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--ink-muted);margin-bottom:8px;">
+              Cluster average — ${result.subjects.map((subj, i) => `${subj}: ${Math.round(c.centroid[i])}%`).join(" · ")}
+            </div>
+            <div style="font-size:12px;color:var(--ink-soft);">${c.members.map(m => `${m.name} (Std ${m.standard})`).join(", ")}</div>
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
 function studentRowHtml(s) {
   const sc = studentSubjectScore(s.id);
-  const pct = Math.round(sc.overallScore10 * 10);
+  const pct = sc.overallPct;
   const badge = statusBadge(pct);
   const c = avatarColor(s.id);
   return `<tr>
@@ -392,6 +524,7 @@ function studentRowHtml(s) {
 function renderStudents() {
   const list = visibleStudents();
   pageBody.innerHTML = `
+    ${filterBarHtml()}
     <div class="card">
       <div class="card-header"><span class="card-header-icon">👩‍🎓</span><h3>All students</h3><span style="font-size:11px;color:var(--ink-muted)">${list.length} shown</span></div>
       <div style="padding:0 0.75rem;">
@@ -401,6 +534,7 @@ function renderStudents() {
         </table>
       </div>
     </div>`;
+  wireFilterBar();
 }
 
 // ================= QUESTION BANK TAB =================

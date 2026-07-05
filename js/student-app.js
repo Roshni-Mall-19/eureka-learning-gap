@@ -182,7 +182,7 @@ function screenQuestion() {
             <label class="likert-opt">
               <input type="radio" name="likert" value="${v}" ${state.answers[q.id]==v ? "checked":""}>
               <div class="dot">${v}</div>
-              <div class="likert-caption">${v===1||v===5 ? labels[v-1] : ""}</div>
+              <div class="likert-caption">${labels[v-1]}</div>
             </label>`).join("")}
         </div>
       </div>`;

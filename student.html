@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Science Learning Check-up</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="student" id="bodyEl">
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span> <span id="brandText">Science Check-up</span></div>
+    <button id="fontToggleBtn" class="a11y-btn" title="Change text size">Aa</button>
+  </div>
+  <div class="wrap" id="app"></div>
+
+  <script src="js/translations.js"></script>
+  <script src="js/scoring.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/student-app.js"></script>
+<!-- questions are fetched live from Supabase (see js/student-app.js) so admin-added questions show up automatically -->
+
+</body>
+</html>

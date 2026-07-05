@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShikshaSetu — Learning Gap Detector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="css/admin.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body class="dash">
+
+<div id="loginScreen" style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:var(--page);">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.2rem 2rem;width:100%;max-width:340px;">
+    <div class="brand-logo" style="margin-bottom:1.4rem;">
+      <div class="brand-icon">🎓</div>
+      <div>
+        <div style="font-family:var(--font-display);font-weight:700;font-size:17px;color:var(--ink);">ShikshaSetu</div>
+        <div style="font-size:10px;color:var(--ink-muted);letter-spacing:1px;text-transform:uppercase;">Researcher Login</div>
+      </div>
+    </div>
+    <div class="form-row"><label>Admin Email</label><input id="loginUser" type="email" autocomplete="username" placeholder="you@yourschool.org"></div>
+    <div class="form-row"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div>
+    <button class="btn btn-primary" id="loginBtn" style="width:100%;margin-top:6px;">Log In</button>
+    <p id="loginErr" style="color:var(--red);font-size:12px;font-weight:600;margin-top:10px;display:none;">Incorrect email or password.</p>
+    <p style="font-size:11px;color:var(--ink-muted);margin-top:10px;">First time? Create this user in your Supabase Dashboard → Authentication → Users → Add user. See README "Admin dashboard login".</p>
+  </div>
+</div>
+
+<div id="dashboardRoot" style="display:none;">
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-logo">
+      <div class="brand-icon">🎓</div>
+      <div>
+        <div class="brand-name">ShikshaSetu</div>
+        <div class="brand-sub">Learning Analytics</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="nav-section">Overview</div>
+  <a class="nav-item active" data-tab="overview" href="#"><span class="nav-icon">📊</span> Dashboard</a>
+  <a class="nav-item" data-tab="students" href="#"><span class="nav-icon">👩‍🎓</span> Students <span class="nav-badge" id="navStudentCount">0</span></a>
+
+  <div class="nav-section">Analysis</div>
+  <a class="nav-item" data-tab="overview" href="#"><span class="nav-icon">🔍</span> Gap Reports <span class="nav-badge" id="navGapCount">0</span></a>
+
+  <div class="nav-section">Admin</div>
+  <a class="nav-item" data-tab="questions" href="#"><span class="nav-icon">🗂️</span> Question Bank</a>
+  <a class="nav-item" href="seed.html"><span class="nav-icon">⚙️</span> Setup / Seed Data</a>
+
+  <div class="sidebar-footer">
+    <div class="school-tag">
+      <strong>IEEE Eu-Reka 2026</strong>
+      AI Learning Gap Detection · Science, Maths, English, Computer · Std 8–10
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
+    <div>
+      <div class="topbar-title" id="topbarTitle">Dashboard</div>
+      <div class="topbar-sub">Science · Maths · English · Computer — Classes 8–10 <span id="liveDot" style="display:none;color:var(--green);font-weight:600;">· ● Live</span></div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="search-box"><span>🔍</span><input type="text" id="searchBox" placeholder="Search students…"></div>
+    <button class="btn-primary-top" id="exportBtn">⬇ Export Excel</button>
+    <button class="btn" style="background:var(--surface);border:1px solid var(--border);color:var(--ink-soft);" id="logoutBtn">Logout</button>
+  </header>
+
+  <main class="page-body" id="pageBody"></main>
+</div>
+</div>
+
+<script src="js/scoring.js"></script>
+<script src="js/clustering.js"></script>
+<script src="js/supabase-client.js"></script>
+<script src="js/admin-app.js"></script>
+</body>
+</html>

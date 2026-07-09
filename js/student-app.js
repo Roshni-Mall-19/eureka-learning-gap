@@ -277,16 +277,6 @@ function screenQuestion() {
 async function submitQuestionnaire() {
   appEl.innerHTML = `<div class="card"><p class="sub">Saving your answers...</p></div>`;
 
-  const { data: studentRow, error: studentErr } = await supabaseClient
-    .from("students")
-    .insert([{ ...state.student, standard: state.standard, language_used: state.lang }])
-    .select().single();
-
-  if (studentErr) {
-    appEl.innerHTML = `<div class="card"><p class="sub">Something went wrong saving your details: ${studentErr.message}</p></div>`;
-    return;
-  }
-
   const responseRows = state.questions.map(q => {
     const val = state.answers[q.id];
     let is_correct = null;
@@ -303,18 +293,28 @@ async function submitQuestionnaire() {
     } else {
       answer_value = val === undefined ? null : String(val);
     }
-    return { student_id: studentRow.id, question_id: q.id, answer_value, is_correct };
+    return { question_id: q.id, answer_value, is_correct };
   });
 
-  const { error: respErr } = await supabaseClient.from("responses").insert(responseRows);
-  if (respErr) {
-    appEl.innerHTML = `<div class="card"><p class="sub">Something went wrong saving your answers: ${respErr.message}</p></div>`;
+  const { data: newStudentId, error: submitErr } = await supabaseClient.rpc("submit_questionnaire", {
+    student_data: { ...state.student, standard: state.standard, language_used: state.lang },
+    response_rows: responseRows
+  });
+
+  if (submitErr) {
+    appEl.innerHTML = `
+      <div class="card">
+        <p class="sub">Something went wrong saving your answers: ${submitErr.message}. Nothing was saved — please try again.</p>
+        <button class="big-btn" id="retryBtn" style="margin-top:14px;">Try Again</button>
+      </div>`;
+    document.getElementById("retryBtn").onclick = submitQuestionnaire;
     return;
   }
 
-  const conceptResult = computeScores(responseRows, state.questions); // gives confidenceIndex10 (Section A self-rating)
-  const subjectResult = computeSubjectScores(responseRows, state.questions); // statistically meaningful per-subject %
-  screenResults(subjectResult, conceptResult.confidenceIndex10, responseRows);
+  const scoredRows = responseRows.map(r => ({ ...r, student_id: newStudentId }));
+  const conceptResult = computeScores(scoredRows, state.questions);
+  const subjectResult = computeSubjectScores(scoredRows, state.questions);
+  screenResults(subjectResult, conceptResult.confidenceIndex10, scoredRows);
 }
 
 // ---------- Screen: Results ----------

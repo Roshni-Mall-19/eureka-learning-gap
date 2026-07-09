@@ -251,15 +251,30 @@ function exportExcel() {
   XLSX.writeFile(wb, `learning-gap-full-data-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
+async function fetchAll(table, orderCol, ascending = true) {
+  const pageSize = 1000;
+  let from = 0;
+  let all = [];
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from(table).select("*").order(orderCol, { ascending }).range(from, from + pageSize - 1);
+    if (error) { console.error(`Error fetching ${table}:`, error.message); break; }
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 async function loadAll() {
-  const [{ data: students }, { data: questions }, { data: responses }] = await Promise.all([
-    supabaseClient.from("students").select("*").order("created_at", { ascending: false }),
-    supabaseClient.from("questions").select("*").order("order_index", { ascending: true }),
-    supabaseClient.from("responses").select("*")
+  const [students, questions, responses] = await Promise.all([
+    fetchAll("students", "created_at", false),
+    fetchAll("questions", "order_index", true),
+    fetchAll("responses", "created_at", true)
   ]);
-  adminState.students = students || [];
-  adminState.questions = questions || [];
-  adminState.responses = responses || [];
+  adminState.students = students;
+  adminState.questions = questions;
+  adminState.responses = responses;
   document.getElementById("liveDot").style.display = "inline";
   document.getElementById("navStudentCount").textContent = adminState.students.length;
   render();

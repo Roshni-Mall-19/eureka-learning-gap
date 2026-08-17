@@ -1,9 +1,3 @@
--- ============================================================
--- Run this WHOLE block in Supabase SQL Editor to guarantee correct,
--- clean policies — safe to run even if some policies already exist
--- or are in a partial/broken state.
--- ============================================================
-
 alter table students enable row level security;
 alter table questions enable row level security;
 alter table responses enable row level security;

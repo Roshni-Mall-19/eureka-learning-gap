@@ -1,8 +1,3 @@
--- ============================================================
--- FINAL bulletproof RLS fix. Run this WHOLE block.
--- Dynamically drops every existing policy on these 3 tables (no matter what
--- it's named, from any previous attempt), then creates a clean, correct set.
--- ============================================================
 
 -- Drop every policy that currently exists on these tables, whatever it's called
 do $$

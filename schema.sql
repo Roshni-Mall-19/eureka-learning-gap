@@ -1,8 +1,3 @@
--- ============================================================
--- AI-Based Learning Gap Detection System — Supabase schema
--- Run this ONCE in Supabase Dashboard -> SQL Editor -> New query -> Run
--- ============================================================
-
 create extension if not exists "pgcrypto";
 
 -- Students who take the questionnaire

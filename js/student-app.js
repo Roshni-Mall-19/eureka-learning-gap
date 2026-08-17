@@ -368,7 +368,6 @@ function screenResults(subjectResult, confidenceIndex10, responseRows) {
 }
 
 // Full answer review: shows every scored question with the student's answer, whether it was
-// correct, and the correct answer if they got it wrong — so they can actually learn from the test.
 function answerReviewHtml(responseRows) {
   const qMap = {}; state.questions.forEach(q => { qMap[q.id] = q; });
   return responseRows.map(r => {

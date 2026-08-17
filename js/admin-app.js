@@ -1,11 +1,6 @@
 const pageBody = document.getElementById("pageBody");
 const topbarTitle = document.getElementById("topbarTitle");
 
-// ================= Real login (Supabase Auth) =================
-// Access to student data and question-bank editing is enforced at the DATABASE level via Row Level
-// Security (see schema.sql) — only a signed-in Supabase Auth user can read students/responses or
-// manage questions. This login form just calls Supabase's real auth, so the protection is genuine,
-// not just a JS gate a visitor could bypass by reading this file.
 async function checkLogin() {
   const email = document.getElementById("loginUser").value.trim();
   const pass = document.getElementById("loginPass").value;
@@ -154,8 +149,7 @@ function visibleStudents() {
   );
 }
 
-// Full data export — always exports the ENTIRE dataset (not just the currently filtered/searched
-// view) since this is meant to be the complete research dataset for analysis outside the app.
+
 function buildSummaryRows(students) {
   return students.map(s => {
     const resp = adminState.responses.filter(r => r.student_id === s.id);
@@ -197,9 +191,7 @@ function buildResponseRows(students, questions, responses, standardFilter) {
     });
 }
 
-// Wide, "Google Forms style" export — ONE ROW PER STUDENT, one column per question (Q1, Q2, ... Qn),
-// in the exact order questions appear in the app. Automatically picks up any question added later
-// (no hardcoded question count), since the columns are built fresh from the current question bank.
+
 function buildWideDataRows(students, questions, responses, standard) {
   const qs = questions.filter(q => q.standard === standard).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
   const respByStudent = {};
@@ -334,10 +326,7 @@ function allConceptEntries(students) {
   return rows;
 }
 
-// Aggregates per-student concept entries into ONE row per (concept + class), averaged across every
-// student who attempted it. This is the number that should drive "gap severity" and "recent gaps" —
-// a single student's single wrong answer is not, by itself, a "40% accuracy" or "0% accuracy" class
-// statistic; it only becomes a meaningful percentage once averaged across everyone who took that question.
+
 function aggregateConceptStats(conceptEntries) {
   const agg = {};
   conceptEntries.forEach(e => {

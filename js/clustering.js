@@ -1,11 +1,3 @@
-// ============================================================
-// Genuine unsupervised ML: k-means clustering.
-// This groups students by their 4-subject score vector (Science%, Maths%, English%, Computer%)
-// into learning-profile clusters — this IS a real machine learning technique (unsupervised
-// clustering), unlike the rule-based weighted scoring in scoring.js. See README for an honest
-// breakdown of what in this app is "AI" vs. a plain algorithm.
-// ============================================================
-
 function euclideanDistance(a, b) {
   return Math.sqrt(a.reduce((sum, v, i) => sum + (v - b[i]) ** 2, 0));
 }
@@ -62,8 +54,6 @@ function labelCluster(centroid) {
   return { label: "Needs broad support", color: "#D63B3B" };
 }
 
-// students: [{ id, name, standard, subjectPct: {Science, Maths, English, Computer} }]
-// Returns null if too few students to cluster meaningfully.
 function clusterStudents(students, k = 3) {
   if (students.length < 3) return null;
   const SUBJECTS = ["Science", "Maths", "English", "Computer"];

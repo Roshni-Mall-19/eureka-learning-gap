@@ -1,10 +1,3 @@
-// Question bank — Maharashtra State Board (SSC) syllabus, Classes 8-10
-// Subjects covered in the knowledge section: Science, Maths, English, Computer/Tech
-// type: "likert" (1-5) | "mcq_behaviour" (single choice) | "ai_readiness" (single choice)
-// | "mcq" (single-answer knowledge question, scored) | "mcq_multi" (MULTIPLE correct options, scored)
-// | "text" (open answer)
-// Total per standard = 10 likert + 5 behaviour + 4 AI + 20 knowledge MCQs (5/subject) + 3 text = 42
-
 const SECTION_A_LIKERT = [
   { id: "a1", concept: "engagement", en: "I enjoy learning new subjects in school.", hi: "मुझे स्कूल में नए विषय सीखना अच्छा लगता है।", mr: "मला शाळेत नवीन विषय शिकायला आवडतं." },
   { id: "a2", concept: "engagement", en: "I understand what is taught in class easily.", hi: "मुझे क्लास में पढ़ाई गई बातें आसानी से समझ आती हैं।", mr: "मला वर्गात शिकवलेलं सहज समजतं." },

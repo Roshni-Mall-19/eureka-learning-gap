@@ -1,12 +1,5 @@
-// AI Scoring Layer — concept-wise gap detection
-// Weighting: harder correct answers count for more (they signal deeper understanding)
 const DIFFICULTY_WEIGHT = { basic: 1, medium: 1.5, hard: 2 };
 
-/**
- * responses: array of { question_id, answer_value, is_correct }
- * questions: array of question objects (from DB) with concept, difficulty, type
- * Returns: { conceptScores: [{concept, score10, weak, attempted}], overallScore10, confidenceIndex10 }
- */
 function computeScores(responses, questions) {
   const qMap = {};
   questions.forEach(q => { qMap[q.id] = q; });
@@ -43,13 +36,6 @@ function computeScores(responses, questions) {
   return { conceptScores, overallScore10, confidenceIndex10 };
 }
 
-/**
- * Subject-level scoring — used on the STUDENT result screen.
- * Each subject has ~5 questions answered, so a percentage here is statistically
- * meaningful (unlike per-concept scores, which are based on just 1 question each
- * and would misleadingly show 100% or 0%).
- * Returns: { subjects: [{subject, score10, correct, total, weakConcepts}], overallScore10 }
- */
 function computeSubjectScores(responses, questions) {
   const qMap = {};
   questions.forEach(q => { qMap[q.id] = q; });
@@ -85,7 +71,6 @@ function computeSubjectScores(responses, questions) {
 }
 
 // One consolidated recommendation per weak SUBJECT, naming the specific weak concepts inside it
-// (instead of repeating a near-identical block once per concept).
 function recommendationForSubject(subject, weakConcepts, lang) {
   const named = weakConcepts.slice(0, 3).join(lang === "en" ? ", " : ", ");
   const templates = {
@@ -97,7 +82,6 @@ function recommendationForSubject(subject, weakConcepts, lang) {
 }
 
 // Recommendation templates — generic pattern per resource type, filled with the concept name
-// (kept for backward compatibility / admin-side per-concept notes)
 function recommendationFor(concept, lang) {
   const templates = {
     en: (c) => `Your concepts in "${c}" need more practice. Watch a short explainer video, redo the textbook examples, and try 5 extra practice questions on this topic this week.`,
